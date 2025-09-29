@@ -1,0 +1,2491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Live ASCII Video Player — GPU+Truecolor, Dither, Palettes</title>
+  <style>
+    :root{
+      --bg:#0b0b0b; --fg:#eaeaea; --muted:#9aa0a6; --accent:#8ab4f8;
+      --card:#151515; --border:#262626; --danger:#e57373;
+      --stage-ar: 16/9;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";}
+    .wrap{display:grid;grid-template-rows:auto 1fr auto;min-height:100dvh;}
+    header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+    header h1{font-size:18px;line-height:1.2;margin:0;font-weight:700;letter-spacing:.2px}
+    header .sub{font-size:12px;color:var(--muted)}
+    .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px}
+    label{font-size:12px;color:var(--muted);display:block;margin-bottom:6px}
+    input[type="text"], input[type="number"], input[type="url"], .btn, select{
+      background:#101010;border:1px solid var(--border);color:var(--fg);
+      padding:8px 10px;border-radius:10px;outline:none;min-width:0;
+    }
+    input[type="range"]{width:160px}
+    .btn{cursor:pointer;user-select:none;transition:transform .05s ease, background .2s ease}
+    .btn:hover{background:#141414}
+    .btn:active{transform:translateY(1px)}
+    .btn.primary{background:var(--accent);color:#0b1220;border-color:#2b63d3}
+    .btn.danger{background:var(--danger);color:#190a0a;border-color:#7a2e2e}
+    .btn.ghost{background:transparent;border-color:var(--border)}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
+    .row .col{display:flex;flex-direction:column;gap:6px}
+    .grow{flex:1 1 auto}
+    main{display:grid;grid-template-columns:420px 1fr;gap:16px;padding:16px;min-height:0}
+    .left{min-width:280px}
+    .right{display:grid;grid-template-rows:1fr auto;min-height:0}
+    .stage{contain: layout; position:relative;display:flex;align-items:center;justify-content:center;background:#000;border-radius:12px;border:1px solid var(--border);min-height:320px;overflow:auto;aspect-ratio:var(--stage-ar)}
+    canvas#ascii{display:block;width:100%;height:100%;}
+    canvas#asciiGpu{display:block;width:100%;height:100%;}
+    .footer{padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;color:var(--muted);font-size:12px}
+    .kv{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center}
+    .muted{color:var(--muted)}
+    .small{font-size:12px}
+    .hint{font-size:12px;color:var(--muted);margin-top:6px}
+    .stack{display:grid;gap:10px}
+    .hidden{display:none !important}
+    .switch{display:flex;align-items:center;gap:8px}
+    .notice{background:#0f1a2b;border:1px dashed #2b63d3;color:#bcd3ff;padding:10px 12px;border-radius:12px;font-size:12px}
+    .code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+
+    .mobile-only{display:none}
+    .desktop-only{display:initial}
+    body.is-mobile .desktop-only{display:none}
+    body.is-mobile .mobile-only{display:initial}
+
+    body.is-mobile main{grid-template-columns:1fr; padding:10px; gap:10px}
+    body.is-mobile .left{order:2}
+    body.is-mobile .right{order:1}
+    body.is-mobile .stage{min-height:38dvh; border-radius:10px}
+    body.is-mobile input[type="range"]{width:100%}
+    body.is-mobile .kv{grid-template-columns:1fr 1fr}
+    .mobilebar{display:none}
+    body.is-mobile .mobilebar{
+      position:sticky;bottom:0;left:0;right:0;
+      display:flex;gap:8px;align-items:center;justify-content:space-between;
+      background:var(--card);border-top:1px solid var(--border);
+      padding:8px env(safe-area-inset-right) calc(8px + env(safe-area-inset-bottom)) env(safe-area-inset-left);
+      z-index:10;
+    }
+    body.is-mobile .mobilebar .btn{flex:0 0 auto; padding:10px 12px; border-radius:12px}
+    body.is-mobile .mobilebar .btn.wide{flex:1 1 auto}
+    body.is-mobile .mobilebar input[type="range"]{width:100%}
+    body.is-mobile .footer{padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+
+    header, main .left, .mobilebar { position: relative; z-index: 20; }
+    .stage{ z-index: 0; pointer-events: auto; }
+    .stage canvas, #asciiPre { pointer-events: none; }
+    #video { pointer-events: none; }
+  
+    /* Floating/Draggable stage + resizer */
+    .stage.floating{
+      position: fixed;
+      top: 12px; left: 12px;
+      width: min(80vw, 960px);
+      height: auto;
+      aspect-ratio: var(--stage-ar);
+      box-shadow: 0 10px 30px rgba(0,0,0,.5);
+      cursor: grab;
+      z-index: 1000;
+    }
+    .stage.floating.dragging{ cursor: grabbing; }
+    .resize-handle{
+      position:absolute; right:6px; bottom:6px;
+      width:18px; height:18px;
+      border-right: 2px solid rgba(255,255,255,.8);
+      border-bottom: 2px solid rgba(255,255,255,.8);
+      border-radius: 2px;
+      touch-action: none;
+      pointer-events: auto;
+      display: none;
+    }
+    .stage.floating .resize-handle{ display:block; }
+
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Live ASCII Video Player</h1>
+        <div class="sub">GPU‑accelerated WebGL renderer (truecolor/palette/dither) + Canvas/&lt;pre&gt; fallbacks. Extra image controls, better stats, and a sturdier toggle.</div>
+      </div>
+      <div class="controls desktop-only">
+        <button class="btn primary" id="playBtn">Play</button>
+        <button class="btn ghost" id="pauseBtn">Pause</button>
+        <button class="btn danger" id="stopBtn">Stop</button>
+        <button class="btn ghost" id="muteBtn">Mute</button>
+        <button class="btn ghost" id="fsBtn">Full-screen</button>
+        <button class="btn ghost" id="snapBtn" title="Save PNG of the ASCII canvas">Snapshot</button>
+        <button class="btn ghost" id="floatBtn" title="Toggle floating draggable window">Float</button>
+        <button class="btn ghost" id="resetViewBtn" title="Reset size/position">Reset</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="right">
+        <div class="stage" id="stage">
+          <canvas id="ascii"></canvas>
+          <canvas id="asciiGpu" class="hidden"></canvas>
+          <pre id="asciiPre" class="hidden" style="margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;line-height:1.0;font-size:14px;color:#fff;white-space:pre;user-select:text;"></pre>
+          <div class="resize-handle" id="resizeHandle" title="Drag to resize"></div>
+        </div>
+        <div class="card" style="margin-top:12px">
+          <video id="video" class="hidden" crossorigin="anonymous" playsinline webkit-playsinline></video>
+          <div class="small muted">The native &lt;video&gt; element is hidden by default; enable “Show native video controls” to reveal it.</div>
+        </div>
+      </section>
+
+      <section class="left stack">
+        <!-- Load -->
+        <div class="card">
+          <div class="row">
+            <div class="grow">
+              <label for="fileInput">Load video file</label>
+              <input id="fileInput" type="file" accept="video/*"/>
+              <div class="hint">Best: a local <span class="code">.mp4</span> (no CORS issues).</div>
+            </div>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <div class="grow">
+              <label for="urlInput">Or paste a direct video URL</label>
+              <input id="urlInput" type="url" placeholder="https://example.com/video.mp4 (must allow CORS)"/>
+            </div>
+            <button class="btn" id="loadUrlBtn">Load URL</button>
+          </div>
+        </div>
+
+        <!-- Quality & sampling -->
+        <div class="card">
+          <div class="row">
+            <div>
+              <label for="scale">Sampling (px / char)</label>
+              <input id="scale" type="range" min="4" max="36" step="1" value="10"/>
+              <div class="small muted" id="scaleLabel">10 px/char</div>
+            </div>
+            <div>
+              <label for="fontSize">Font size (px)</label>
+              <input id="fontSize" type="number" min="6" max="28" value="14"/>
+            </div>
+            <div>
+              <label for="fpsCap">FPS cap</label>
+              <input id="fpsCap" type="number" min="5" max="60" value="30"/>
+            </div>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <div class="switch">
+              <input id="autoQuality" type="checkbox"/>
+              <label for="autoQuality">Auto quality (keep FPS near cap)</label>
+            </div>
+            <div class="switch">
+              <input id="useWebGPU" type="checkbox"/>
+              <label for="useWebGPU">Use WebGPU renderer (fastest)</label>
+            </div>
+            <div class="switch">
+              <input id="useWebGL" type="checkbox" checked/>
+              <label for="useWebGL">Use WebGL renderer (faster)</label>
+            </div>
+            <div class="switch">
+              <input id="usePre" type="checkbox"/>
+              <label for="usePre">Render as DOM text (&lt;pre&gt;)</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Characters & mapping -->
+        <div class="card">
+          <div class="row">
+            <div class="grow">
+              <label for="charset">Custom charset (dark → light)</label>
+              <input id="charset" type="text" value="@$B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/|()1{}[]?-_+~<>i!lI;:,\&quot;^`'. " />
+              <div class="hint">Tip: keep a trailing space for the lightest shade.</div>
+            </div>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <div class="grow">
+              <label for="charsetPreset">Preset</label>
+              <select id="charsetPreset">
+                <option value="dense" selected>Dense (classic art)</option>
+                <option value="classic">Classic (@%#*+=-:. )</option>
+                <option value="blocks">Blocks (█▓▒░…)</option>
+                <option value="numbers">Numbers & punctuation</option>
+                <option value="custom">Use Custom</option>
+              </select>
+            </div>
+            <div class="switch">
+              <input id="invert" type="checkbox"/>
+              <label for="invert">Invert</label>
+            </div>
+            <div class="switch">
+              <input id="hqLuma" type="checkbox"/>
+              <label for="hqLuma">HQ luminance (BT.709)</label>
+            </div>
+            <div class="switch">
+              <input id="msaa4" type="checkbox"/>
+              <label for="msaa4">Multi-sample (4×/cell)</label>
+            </div>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <div class="grow">
+              <label for="fontFamily">Font</label>
+              <select id="fontFamily">
+                <option value="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" selected>System Mono</option>
+                <option value="'Courier New', Courier, monospace">Courier New</option>
+                <option value="Consolas, 'Lucida Console', monospace">Consolas</option>
+              </select>
+            </div>
+            <div class="switch">
+              <input id="halfBlock" type="checkbox"/>
+              <label for="halfBlock">Half-block mode (▀/▄)</label>
+            </div>
+            <div class="switch">
+              <input id="blink" type="checkbox"/>
+              <label for="blink">Simulate blink</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Color & palette -->
+        <div class="card">
+          <div class="row">
+            <div class="grow">
+              <label for="colorMode">Color mode</label>
+              <select id="colorMode">
+                <option value="off">Off (monochrome)</option>
+                <option value="fg16" selected>16‑color (palette)</option>
+                <option value="gray4">Grays (B/DkG/LtG/W)</option>
+                <option value="fg216">Web‑safe 216</option>
+                <option value="xterm256">XTerm 256 (approx)</option>
+                <option value="fullcolor">Truecolor 24‑bit</option>
+              </select>
+            </div>
+            <div class="grow">
+              <label for="paletteMode">Palette</label>
+              <select id="paletteMode">
+                <option value="dos" selected>DOS RGBI</option>
+                <option value="win16">Windows 16</option>
+                <option value="ansi16">ANSI 16</option>
+                <option value="vga16">VGA 16 (Win9x)</option>
+                <option value="cga16">CGA 16</option>
+                <option value="gray16">Gray 16</option>
+                <option value="xterm16">XTerm 16</option>
+                <option value="vga-auto">VGA Auto (learn 16)</option>
+              </select>
+            </div>
+            <div class="grow">
+              <label for="dither">Ordered dither</label>
+              <select id="dither">
+                <option value="off" selected>Off</option>
+                <option value="bayer2">Bayer 2×2</option>
+                <option value="bayer4">Bayer 4×4</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <div class="col">
+              <label for="gamma">Gamma</label>
+              <input id="gamma" type="range" min="0.6" max="2.0" step="0.05" value="1.00"/>
+            </div>
+            <div class="col">
+              <label for="contrast">Contrast</label>
+              <input id="contrast" type="range" min="0.5" max="2.0" step="0.05" value="1.00"/>
+            </div>
+            <div class="col">
+              <label for="saturation">Saturation</label>
+              <input id="saturation" type="range" min="0.0" max="2.0" step="0.05" value="1.00"/>
+            </div>
+            <div class="col">
+              <label for="edgeBoost">Edge boost</label>
+              <input id="edgeBoost" type="range" min="0.0" max="1.0" step="0.05" value="0.00"/>
+            </div>
+          </div>
+        </div>
+
+        <!-- Misc -->
+        <div class="card">
+          <div class="kv small">
+            <div class="muted">Resolution</div><div id="resOut">—</div>
+            <div class="muted">Video</div><div id="infoOut">—</div>
+            <div class="muted">Renderer</div><div id="rendererOut">Canvas text</div>
+            <div class="muted">Timing</div><div id="timingOut">—</div>
+            <div class="muted">GPU (approx)</div><div id="gpuOut">—</div>
+            <div class="muted">Watchdog</div><div id="watchdogOut">—</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Mobile action bar -->
+    <div class="mobilebar" id="mobileBar" role="toolbar" aria-label="Playback controls">
+      <button class="btn primary" id="mPlay">Play</button>
+      <button class="btn ghost" id="mPause">Pause</button>
+      <button class="btn danger" id="mStop">Stop</button>
+      <button class="btn ghost" id="mMute">Mute</button>
+      <button class="btn ghost" id="mFs" aria-label="Toggle Fullscreen">⤢</button>
+          <button class="btn ghost" id="mFloat" aria-label="Float window">⇲</button>
+    </div>
+
+    <div class="footer">
+      <div>ASCII Player • Truecolor/Palettes • Dither • Half‑block • GPU/CPU + DOM fallbacks</div>
+      <div id="status" class="muted">Idle</div>
+    </div>
+  </div>
+
+  <!-- ===== Main App (Canvas & <pre> fallbacks remain) ===== -->
+  <script>
+  (() => {
+    function isMobileUA(){
+      const ua = navigator.userAgent || navigator.vendor || window.opera || "";
+      return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+    }
+    if (isMobileUA()) document.body.classList.add('is-mobile');
+
+    function setStageAspectForOrientation(){
+      if (!document.body.classList.contains('is-mobile')) return;
+      const portrait = (screen.orientation && screen.orientation.type ? screen.orientation.type.includes('portrait') : window.innerHeight >= window.innerWidth);
+      document.documentElement.style.setProperty('--stage-ar', portrait ? '9/16' : '16/9');
+    }
+    setStageAspectForOrientation();
+    window.addEventListener('orientationchange', setStageAspectForOrientation);
+    window.addEventListener('resize', setStageAspectForOrientation);
+
+    const video = document.getElementById('video');
+    const asciiCanvas = document.getElementById('ascii');
+    const asciiCtx = asciiCanvas.getContext('2d');
+    asciiCtx.textBaseline = 'top';
+    // HiDPI crispness
+    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    function sizeAsciiCanvas(cssW, cssH){
+      asciiCanvas.width  = Math.round(cssW * dpr);
+      asciiCanvas.height = Math.round(cssH * dpr);
+      asciiCanvas.style.width = cssW + 'px';
+      asciiCanvas.style.height = cssH + 'px';
+      asciiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    const asciiPre = document.getElementById('asciiPre');
+    const stage = document.getElementById('stage');
+
+    const workCanvas = document.createElement('canvas');
+    const workCtx = workCanvas.getContext('2d', { willReadFrequently: true });
+    window.workCanvas = workCanvas; // expose for GL path
+
+    // Controls
+    const Q = (id)=>document.getElementById(id);
+    const playBtn = Q('playBtn'), pauseBtn=Q('pauseBtn'), stopBtn=Q('stopBtn'), muteBtn=Q('muteBtn'), fsBtn=Q('fsBtn'), snapBtn=Q('snapBtn');
+    const mPlay=Q('mPlay'), mPause=Q('mPause'), mStop=Q('mStop'), mMute=Q('mMute'), mFs=Q('mFs');
+    const fileInput=Q('fileInput'), urlInput=Q('urlInput'), loadUrlBtn=Q('loadUrlBtn');
+
+    const scaleInput=Q('scale'), scaleLabel=Q('scaleLabel');
+    const fontSizeInput=Q('fontSize'), fpsCapInput=Q('fpsCap');
+    const charsetInput=Q('charset'), charsetPreset=Q('charsetPreset');
+    const invertInput=Q('invert'), hqLumaInput=Q('hqLuma'), msaa4Input=Q('msaa4');
+    const showNativeInput=Q('showNative'); // not present in this build, but keep compatibility
+    const usePreInput=Q('usePre');
+    const colorModeSel=Q('colorMode'), paletteModeSel=Q('paletteMode'), ditherSel=Q('dither');
+    const halfBlockInput=Q('halfBlock'), blinkInput=Q('blink');
+    const fontFamilySel=Q('fontFamily');
+    const gammaInput=Q('gamma'), contrastInput=Q('contrast'), saturationInput=Q('saturation'), edgeBoostInput=Q('edgeBoost');
+    const autoQualityInput=Q('autoQuality');
+    const useWebGLInput=Q('useWebGL');
+
+    const resOut=Q('resOut'), infoOut=Q('infoOut'), rendererOut=Q('rendererOut'), timingOut=Q('timingOut'), gpuOut=Q('gpuOut'), watchdogOut=Q('watchdogOut'), status=Q('status');
+
+    // Palettes (16-color families)
+    const DOS16 = [
+      [0,0,0],[170,0,0],[0,170,0],[170,85,0],[0,0,170],[170,0,170],[0,170,170],[170,170,170],
+      [85,85,85],[255,85,85],[85,255,85],[255,255,85],[85,85,255],[255,85,255],[85,255,255],[255,255,255]
+    ];
+    const WIN16 = [
+      [0,0,0],[128,0,0],[0,128,0],[128,128,0],[0,0,128],[128,0,128],[0,128,128],[192,192,192],
+      [128,128,128],[255,0,0],[0,255,0],[255,255,0],[0,0,255],[255,0,255],[0,255,255],[255,255,255]
+    ];
+    const ANSI16 = WIN16.slice();
+    const VGA16  = [
+      [0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],
+      [85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]
+    ];
+    const CGA16 = VGA16.slice();
+    const GRAY16 = Array.from({length:16},(_,i)=>{ const v=(i*17)|0; return [v,v,v]; });
+    const XTERM16 = [
+      [0,0,0],[205,0,0],[0,205,0],[205,205,0],[0,0,238],[205,0,205],[0,205,205],[229,229,229],
+      [127,127,127],[255,0,0],[0,255,0],[255,255,0],[92,92,255],[255,0,255],[0,255,255],[255,255,255]
+    ];
+    function getPalette16(name){
+      switch(name){
+        case 'win16': return WIN16;
+        case 'ansi16': return ANSI16;
+        case 'vga16': return VGA16;
+        case 'cga16': return CGA16;
+        case 'gray16': return GRAY16;
+        case 'xterm16': return XTERM16;
+        case 'dos':
+        default: return DOS16;
+      }
+    }
+    let ACTIVE16 = DOS16.map(c=>c.slice());
+
+    // Simple K-means (16 centers) to learn a palette from frames (VGA‑auto)
+    function kmeansInit(k){ return { k, centers: [], counts: new Uint32Array(k), sums: Array.from({length:k}, ()=>[0,0,0]), frames:0 }; }
+    function kmeansIterate(km, data, iters=1, sampleStep=16){
+      if (km.centers.length===0){ km.centers = DOS16.map(c=>c.slice(0)); }
+      for (let it=0; it<iters; it++){
+        km.counts.fill(0); for (let j=0;j<km.k;j++){ km.sums[j][0]=km.sums[j][1]=km.sums[j][2]=0; }
+        for (let i=0;i<data.length; i+=4*sampleStep){
+          const r=data[i], g=data[i+1], b=data[i+2];
+          let best=0, bestd=1e9;
+          for (let c=0;c<km.k;c++){
+            const cc=km.centers[c]; const dr=r-cc[0], dg=g-cc[1], db=b-cc[2];
+            const d=dr*dr+dg*dg+db*db;
+            if (d<bestd){bestd=d;best=c;}
+          }
+          km.counts[best]++; km.sums[best][0]+=r; km.sums[best][1]+=g; km.sums[best][2]+=b;
+        }
+        for (let c=0;c<km.k;c++){
+          const cnt=km.counts[c]||1; km.centers[c][0]=(km.sums[c][0]/cnt)|0; km.centers[c][1]=(km.sums[c][1]/cnt)|0; km.centers[c][2]=(km.sums[c][2]/cnt)|0;
+        }
+      }
+      ACTIVE16 = km.centers.slice(0,16);
+    }
+
+    // Dither matrices
+    const BAYER2 = [0,2,3,1].map(v=> (v+0.5)/4 );
+    const BAYER4 = [0,8,2,10,12,4,14,6, 3,11,1,9, 15,7,13,5].map(v=> (v+0.5)/16);
+
+    // State
+    let cols=0, rows=0;
+    let sample=10, fontSize=14, fpsCap=30;
+    let charset="@"; // placeholder
+    let invert=false, usingPre=false, useHQLuma=false, msaa4=false;
+    let colorMode='fg16', paletteMode='dos', dither='off', halfBlock=false, blinkOn=false;
+    let fontFamily="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+    let gamma=1.0, contrast=1.0, saturation=1.0, edgeBoost=0.0;
+    let fontMetrics={chW:8, lineH:14};
+    let playing=false, rafId=null, vfcHandle=null, lastFrameTime=0, lastDrawAt=0, stallCount=0;
+    let autoQuality=false;
+    let frameBudgetMs=33.3, slowStreak=0, fastStreak=0;
+
+    const PRESETS = {
+      dense: "@$B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/|()1{}[]?-_+~<>i!lI;:,\\\"^`'. ",
+      classic: "@%#*+=-:. ",
+      blocks: "█▓▒░@#W$9876543210?!;:+=-,._ ",
+      numbers: "MNBH@$&80Z5S2I!;:,._ "
+    };
+
+    let charIdxLUT = new Uint8Array(256);
+    function rebuildCharLUT(){
+      const gl = charset.length - 1;
+      for (let i=0;i<256;i++){
+        charIdxLUT[i] = Math.min(gl, (i*gl/255)|0);
+      }
+    }
+
+    function setStatus(s){ status.textContent = s; }
+    function ms(){ return performance.now(); }
+    const lumFast = (r,g,b)=> ((r*77 + g*150 + b*29) >> 8);
+    const lumHQ = (r,g,b)=> (0.2126*r + 0.7152*g + 0.0722*b);
+    let luminance = lumFast;
+
+    function nearestIdx(rgb, palette){
+      let best = 0, bestd = 1e9;
+      for (let i=0;i<palette.length;i++){
+        const p = palette[i];
+        const dr = rgb[0]-p[0], dg = rgb[1]-p[1], db = rgb[2]-p[2];
+        const d = dr*dr + dg*dg + db*db;
+        if (d<bestd){ bestd=d; best=i; }
+      }
+      return best;
+    }
+    const rgbHex = rgb => "#" + [rgb[0],rgb[1],rgb[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
+
+    function measureFont(){
+      asciiCtx.font = fontSize + "px " + fontFamily;
+      const m = asciiCtx.measureText("M");
+      const chW = Math.max(1, Math.ceil(m.width));
+      const lineH = Math.ceil((m.actualBoundingBoxAscent||fontSize*0.8) + (m.actualBoundingBoxDescent||fontSize*0.2));
+      fontMetrics = { chW, lineH };
+      return fontMetrics;
+    }
+
+    async function restartBackend(){
+      try{ if (window.backendHandle && window.backendHandle.stop) window.backendHandle.stop(); }catch{}
+      if (!window.Backend) return;
+      const W = workCanvas.width|0, H = workCanvas.height|0;
+      window.backendHandle = await Backend.start(video, {cols:W, rows:H}, ({rgba, cols, rows})=>{
+        if (!rgba) return;
+        window._frameRGBA = new Uint8ClampedArray(rgba);
+        window._frameW = cols|0; window._frameH = rows|0;
+      });
+    }
+    window.restartBackend = restartBackend;
+    window.workCanvas = workCanvas;
+
+    function updateDerived(){
+      sample = +scaleInput.value || 10;
+      fontSize = +fontSizeInput.value || 14;
+      fpsCap = +fpsCapInput.value || 30;
+      autoQuality = !!autoQualityInput.checked;
+      charset = (charsetPreset.value === 'custom') ? (charsetInput.value||PRESETS.dense) : PRESETS[charsetPreset.value];
+      if (!charset || charset.length<2) charset = PRESETS.classic + " ";
+      invert = !!invertInput.checked;
+      usingPre = !!usePreInput.checked;
+      useHQLuma = !!hqLumaInput.checked;
+      msaa4 = !!msaa4Input.checked;
+      colorMode = colorModeSel.value;
+      paletteMode = paletteModeSel.value;
+      dither = ditherSel.value;
+      halfBlock = !!halfBlockInput.checked;
+      blinkOn = !!blinkInput.checked;
+      fontFamily = fontFamilySel.value;
+      gamma = +gammaInput.value;
+      contrast = +contrastInput.value;
+      saturation = +saturationInput.value;
+      edgeBoost = +edgeBoostInput.value;
+
+      luminance = useHQLuma ? lumHQ : lumFast;
+      rebuildCharLUT();
+
+      if (video.videoWidth && video.videoHeight){
+        const { chW, lineH } = measureFont();
+        const charAspect = lineH / chW;
+        const vH = halfBlock ? (video.videoHeight/2)|0 : video.videoHeight;
+        cols = Math.max(1, Math.floor(video.videoWidth / sample));
+        rows = Math.max(1, Math.floor(vH / sample * charAspect));
+        workCanvas.width = cols;
+        workCanvas.height = halfBlock ? rows*2 : rows;
+        sizeAsciiCanvas(chW * cols, lineH * rows);
+        resOut.textContent = cols + " × " + rows + (halfBlock ? " (half-block ×2 v)" : "") + " chars";
+        infoOut.textContent = video.videoWidth + "×" + video.videoHeight + " @ " + (video.frameRate || '?') + "fps";
+        rendererOut.textContent = usingPre ? 'DOM <pre>' : ((document.getElementById('useWebGPU')?.checked && 'gpu' in navigator) ? 'WebGPU (ASCII WGSL)' : (useWebGLInput.checked ? 'WebGL (ASCII shader)' : 'Canvas text'));
+      }
+
+      asciiPre.classList.toggle('hidden', !usingPre);
+      const _useGpu = !!(document.getElementById('useWebGPU')?.checked && 'gpu' in navigator);
+      asciiCanvas.classList.toggle('hidden', usingPre || _useGpu);
+      document.getElementById('asciiGpu')?.classList.toggle('hidden', !(_useGpu && !usingPre));
+
+      try { restartBackend(); }catch{}
+    }
+
+    
+function drawFrame(){
+  if (!video.videoWidth || !video.videoHeight) return;
+  const t0 = ms();
+
+  // Prefer worker-provided RGBA buffer to avoid costly getImageData()
+  let data = null, w = workCanvas.width|0, h = workCanvas.height|0;
+  if (window._frameRGBA && window._frameW === w && window._frameH === h) {
+    data = window._frameRGBA;
+  } else {
+    try {
+      workCtx.drawImage(video, 0, 0, workCanvas.width, workCanvas.height);
+    } catch (e){ setStatus('⚠️ Draw blocked (likely CORS). Load a local file instead.'); stopLoops(); return; }
+    const img = workCtx.getImageData(0, 0, workCanvas.width, workCanvas.height);
+    data = img.data;
+  }
+
+  // Auto-learn palette for VGA-auto (keeps parity with GL)
+  if (paletteMode==='vga-auto' && colorMode!=='fullcolor'){
+    try{
+      requestAutoPalUpdate(data, 8, 1);
+      if (window.__autoPal && window.__autoPal.pal16) ACTIVE16 = window.__autoPal.pal16;
+    }catch(e){}
+  } else {
+    ACTIVE16 = getPalette16(paletteMode);
+  }
+
+  // DOM <pre> ultra-light mode
+  if (usingPre) {
+    if (!window.__preLines) window.__preLines = [];
+    const lines = window.__preLines;
+    lines.length = rows;
+    const gl = charset.length - 1, inv = invert;
+    for (let y = 0; y < rows; y++) {
+      let row = '';
+      for (let x = 0; x < cols; x++) {
+        const p = (y * cols + x) * 4;
+        let r = data[p], g = data[p+1], b = data[p+2];
+        // Dithered luminance → glyph index
+        const Y = luminance(r,g,b);
+        const dth = (dither==='off'?0: ((dither==='bayer2'? BAYER2[(y&1)*2+(x&1)] : BAYER4[(y&3)*4+(x&3)])*255 * 0.3));
+        let idx = charIdxLUT[Math.max(0,Math.min(255, Y + (Y<128? -dth : dth)))|0];
+        if (inv) idx = gl - idx;
+        row += charset[idx];
+      }
+      lines[y] = row;
+    }
+    asciiPre.textContent = lines.join('\n');
+    lastDrawAt = ms();
+    timingOut.textContent = 'DOM <pre>, dt≈' + (lastDrawAt - t0).toFixed(1) + 'ms';
+    return;
+  }
+
+  // Canvas path
+  const ctx = asciiCtx;
+  ctx.save();
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, asciiCanvas.width/dpr, asciiCanvas.height/dpr);
+  ctx.font = fontSize + "px " + fontFamily;
+  const gl = charset.length - 1, inv = invert;
+  const chW = fontMetrics.chW, lineH = fontMetrics.lineH;
+
+  // Lightweight color adjustments for CPU path
+  const needsAdj = (gamma!==1.0 || contrast!==1.0 || saturation!==1.0);
+  function adjustRGB_fast(r,g,b){
+    if (!needsAdj) return [r|0,g|0,b|0];
+    const y = 0.2126*r + 0.7152*g + 0.0722*b;
+    let rl = y + (r - y) * saturation;
+    let glx = y + (g - y) * saturation;
+    let blx = y + (b - y) * saturation;
+    rl = (rl - 128) * contrast + 128;
+    glx = (glx - 128) * contrast + 128;
+    blx = (blx - 128) * contrast + 128;
+    const invG = 1 / Math.max(0.001, gamma);
+    rl = 255 * ( (rl<=0)?0: Math.pow(rl/255, invG) );
+    glx = 255 * ( (glx<=0)?0: Math.pow(glx/255, invG) );
+    blx = 255 * ( (blx<=0)?0: Math.pow(blx/255, invG) );
+    return [rl|0,glx|0,blx|0];
+  }
+
+  if (!halfBlock){
+    for (let y = 0; y < rows; y++){
+      let runColor = null, runStart = 0, runText = '';
+      for (let x = 0; x < cols; x++){
+        const p = (y * cols + x) * 4;
+        let r=data[p], g=data[p+1], b=data[p+2];
+        if (needsAdj){ const t=adjustRGB_fast(r,g,b); r=t[0]; g=t[1]; b=t[2]; }
+
+        const Y = luminance(r,g,b);
+        const dth = (dither==='off'?0: ((dither==='bayer2'? BAYER2[(y&1)*2+(x&1)] : BAYER4[(y&3)*4+(x&3)])*255 * 0.3));
+        let idx = charIdxLUT[Math.max(0,Math.min(255, Y + (Y<128? -dth : dth)))|0];
+        if (inv) idx = gl-idx;
+        const ch = charset[idx];
+
+        let fg;
+        if (colorMode==='fullcolor'){ fg = [r,g,b]; }
+        else if (colorMode==='gray4'){ const gray16=[DOS16[0],DOS16[8],DOS16[7],DOS16[15]]; fg = gray16[ nearestIdx([r,g,b], gray16) ]; }
+        else if (colorMode==='fg216' || colorMode==='xterm256'){ const q=(v)=>Math.round(v/51)*51; fg = [q(r),q(g),q(b)]; }
+        else if (colorMode==='off'){ fg = null; }
+        else { fg = ACTIVE16[ nearestIdx([r,g,b], ACTIVE16) ]; }
+
+        const colHex = colorMode==='off' ? '#fff' : rgbHex(fg||[255,255,255]);
+        if (runText===''){ runColor = colHex; runStart = x; runText = ch; }
+        else if (runColor === colHex){ runText += ch; }
+        else {
+          ctx.fillStyle = runColor;
+          ctx.fillText(runText, runStart*chW, y*lineH);
+          runColor = colHex; runStart = x; runText = ch;
+        }
+      }
+      if (runText!==''){
+        ctx.fillStyle = runColor;
+        ctx.fillText(runText, runStart*chW, y*lineH);
+      }
+    }
+  } else {
+    const UP="▀";
+    for (let y = 0; y < rows; y++){
+      let runFG = null, runBG = null, runStart = 0, runText = '';
+      for (let x = 0; x < cols; x++){
+        const pTop = ((y*2) * cols + x) * 4;
+        const pBot = ((y*2+1) * cols + x) * 4;
+        let rt=data[pTop], gt=data[pTop+1], bt=data[pTop+2];
+        let rb=data[pBot], gb=data[pBot+1], bb=data[pBot+2];
+        if (needsAdj){ const t1=adjustRGB_fast(rt,gt,bt); rt=t1[0]; gt=t1[1]; bt=t1[2]; const t2=adjustRGB_fast(rb,gb,bb); rb=t2[0]; gb=t2[1]; bb=t2[2]; }
+        let topColor, botColor;
+        if (colorMode==='fullcolor'){ topColor=[rt,gt,bt]; botColor=[rb,gb,bb]; }
+        else { topColor=ACTIVE16[ nearestIdx([rt,gt,bt], ACTIVE16) ]; botColor=ACTIVE16[ nearestIdx([rb,gb,bb], ACTIVE16) ]; }
+        const same = (topColor[0]===botColor[0] && topColor[1]===botColor[1] && topColor[2]===botColor[2]);
+        const ch = same ? "█" : UP;
+        const dth = (dither==='off'?0: (BAYER4[(y&3)*4+(x&3)]));
+        const dist = Math.abs(luminance(rt,gt,bt) - luminance(rb,gb,bb));
+        const charOut = (dist < 12 && dth > 0.6) ? " " : ch;
+        const fgHex = rgbHex(topColor), bgHex = rgbHex(botColor);
+        const sameRun = (runFG===fgHex && runBG===bgHex);
+        if (runText===''){ runFG = fgHex; runBG = bgHex; runStart = x; runText = charOut; }
+        else if (sameRun){ runText += charOut; }
+        else {
+          if (runBG){ asciiCtx.fillStyle = runBG; asciiCtx.fillRect(runStart*chW, y*lineH, (x-runStart)*chW, lineH); }
+          asciiCtx.fillStyle = runFG; asciiCtx.fillText(runText, runStart*chW, y*lineH);
+          runFG = fgHex; runBG = bgHex; runStart = x; runText = charOut;
+        }
+      }
+      if (runText!==''){
+        if (runBG){ asciiCtx.fillStyle = runBG; asciiCtx.fillRect(runStart*chW, y*lineH, (cols-runStart)*chW, lineH); }
+        asciiCtx.fillStyle = runFG; asciiCtx.fillText(runText, runStart*chW, y*lineH);
+      }
+    }
+  }
+
+  asciiCtx.restore();
+  lastDrawAt = ms();
+  const t1=ms();
+  const cpuMs = (t1-t0).toFixed(1);
+  timingOut.textContent = (useWebGLInput.checked? 'GL loop':'Canvas') + `, dt≈${cpuMs}ms`;
+
+  // Auto quality scaler (CPU path only)
+  if (autoQuality && !useWebGLInput.checked){
+    frameBudgetMs = 1000/Math.max(5, fpsCap);
+    if ((t1-t0) > frameBudgetMs*1.25){ slowStreak++; fastStreak=0; if (slowStreak>=6 && sample<36){ slowStreak=0; scaleInput.value = String(sample+2); updateDerived(); } }
+    else { fastStreak++; slowStreak=0; if (fastStreak>=120 && sample>6){ fastStreak=0; scaleInput.value = String(sample-1); updateDerived(); } }
+  }
+}
+
+
+    function stopLoops(){
+      try{ if (window.backendHandle && window.backendHandle.stop) window.backendHandle.stop(); }catch{}
+      playing=false;
+      if (rafId) { cancelAnimationFrame(rafId); rafId=null; }
+      if (vfcHandle) { try{ video.cancelVideoFrameCallback(vfcHandle); }catch{} vfcHandle=null; }
+    }
+    function loopRAF(){
+      if (!playing) return;
+      const now = ms();
+      const minDelta = 1000 / Math.max(1, fpsCap);
+      if (now - lastFrameTime >= minDelta){
+        drawFrame(); lastFrameTime = now;
+      }
+      rafId = requestAnimationFrame(loopRAF);
+    }
+    
+function loopVFC(now, metadata){
+  if (!playing) return;
+  drawFrame();
+  vfcHandle = video.requestVideoFrameCallback(loopVFC);
+  // FPS (EMA)
+  if (fpsLast){
+    const dt = (now - fpsLast) / 1000;
+    const inst = dt > 0 ? (1 / dt) : 0;
+    fpsEMA = fpsEMA ? (fpsEMA*0.85 + inst*0.15) : inst;
+    if (infoOut && video.videoWidth && video.videoHeight){
+      infoOut.textContent = `${video.videoWidth}×${video.videoHeight} @ ${fpsEMA.toFixed(1)} fps`;
+    }
+  }
+  fpsLast = now;
+}
+
+    function startLoops(){
+      try{ restartBackend(); }catch{}
+      stopLoops();
+      playing = true;
+      lastFrameTime = 0;
+      lastDrawAt = ms();
+      fpsEMA = 0; fpsLast = 0;
+
+      if (typeof video.requestVideoFrameCallback === 'function'){ vfcHandle = video.requestVideoFrameCallback(loopVFC); }
+      else { rafId = requestAnimationFrame(loopRAF); }
+    }
+
+    // Watchdog
+    const WATCHDOG_INTERVAL_MS = 2000, FREEZE_THRESHOLD_MS = 2500;
+    setInterval(() => {
+      if (!playing) return;
+      const now = ms();
+      if (now - lastDrawAt > FREEZE_THRESHOLD_MS){
+        stallCount++; watchdogOut.textContent = 'Recoveries: ' + stallCount; setStatus('Recovering from stall…');
+        try {
+          if (video.readyState < 2) {
+            const src = video.currentSrc || video.src; const t = video.currentTime;
+            video.load(); video.src = src; video.currentTime = t;
+          }
+          startLoops(); if (video.paused) { video.play().catch(()=>{}); }
+        } catch(e){}
+        lastDrawAt = now;
+      }
+    }, WATCHDOG_INTERVAL_MS);
+    ['stalled','suspend','waiting','emptied','error'].forEach(ev => {
+      video.addEventListener(ev, () => { setStatus('Video ' + ev + '…'); startLoops(); });
+    });
+
+    // UI wiring
+    const inputs = [scaleInput,fontSizeInput,fpsCapInput,charsetInput,charsetPreset,invertInput,hqLumaInput,msaa4Input,usePreInput,colorModeSel,paletteModeSel,ditherSel,halfBlockInput,blinkInput,fontFamilySel,gammaInput,contrastInput,saturationInput,edgeBoostInput,autoQualityInput,useWebGLInput];
+    inputs.forEach(el => {
+      if (!el) return;
+      const evt = (el.tagName==='SELECT') ? 'change' : 'input';
+      el.addEventListener(evt, () => { updateDerived(); });
+    });
+    scaleInput.addEventListener('input', () => { if (scaleLabel) scaleLabel.textContent = scaleInput.value + ' px/char'; });
+    charsetPreset.addEventListener('change', () => { if (charsetPreset.value!=='custom') charsetInput.value = PRESETS[charsetPreset.value]; updateDerived(); });
+
+    // Playback
+    if (playBtn) playBtn.addEventListener('click', async () => { try { await video.play(); startLoops(); setStatus('Playing'); } catch {} });
+    if (pauseBtn) pauseBtn.addEventListener('click', () => { video.pause(); stopLoops(); setStatus('Paused'); });
+    if (stopBtn) stopBtn.addEventListener('click', () => { video.pause(); video.currentTime=0; stopLoops(); setStatus('Stopped'); });
+    if (muteBtn) muteBtn.addEventListener('click', () => {
+      video.muted = !video.muted; const t= video.muted ? 'Unmute' : 'Mute'; muteBtn.textContent=t; mMute.textContent=t;
+    });
+    if (fsBtn) fsBtn.addEventListener('click', () => {
+      if (!document.fullscreenElement){ stage.requestFullscreen && stage.requestFullscreen(); }
+      else { document.exitFullscreen && document.exitFullscreen(); }
+    });
+    if (snapBtn) snapBtn.addEventListener('click', () => {
+      const url = asciiCanvas.toDataURL('image/png');
+      const a = document.createElement('a'); a.href=url; a.download='ascii_snapshot.png'; a.click();
+    });
+
+    if (mPlay) mPlay.addEventListener('click', async () => { try { await video.play(); startLoops(); setStatus('Playing'); } catch{} });
+    if (mPause) mPause.addEventListener('click', () => { video.pause(); stopLoops(); setStatus('Paused'); });
+    if (mStop) mStop.addEventListener('click', () => { video.pause(); video.currentTime=0; stopLoops(); setStatus('Stopped'); });
+    if (mMute) mMute.addEventListener('click', () => { video.muted = !video.muted; const t= video.muted ? 'Unmute' : 'Mute'; mMute.textContent=t; muteBtn.textContent=t; });
+    if (mFs) mFs.addEventListener('click', () => {
+      if (!document.fullscreenElement){ stage.requestFullscreen && stage.requestFullscreen(); }
+      else { document.exitFullscreen && document.exitFullscreen(); }
+    });
+
+    fileInput.addEventListener('change', (e) => { const f=e.target.files?.[0]; if (f){ const url=URL.createObjectURL(f); video.src=url; video.dataset.objecturl=url; video.load(); setStatus('Loaded local file: '+f.name); } });
+    function revokeObjectURLIfAny(){ if (video.dataset.objecturl){ try{URL.revokeObjectURL(video.dataset.objecturl);}catch{} delete video.dataset.objecturl; } }
+    function loadUrl(url){ revokeObjectURLIfAny(); video.crossOrigin='anonymous'; video.src=url.trim(); video.load(); setStatus('Loaded URL (may require CORS): '+url); }
+    loadUrlBtn.addEventListener('click', () => { const url=urlInput.value.trim(); if (url) loadUrl(url); });
+
+    video.addEventListener('loadedmetadata', () => { updateDerived(); });
+    video.addEventListener('resize', updateDerived);
+    window.addEventListener('resize', updateDerived);
+
+    video.addEventListener('pause', () => { stopLoops(); setStatus('Paused'); });
+    video.addEventListener('ended', () => { stopLoops(); setStatus('Ended'); });
+
+    stage.addEventListener('click', () => {
+      if (video.paused){ video.play().then(()=>{ startLoops(); setStatus('Playing'); }).catch(()=>{}); }
+      else { video.pause(); stopLoops(); setStatus('Paused'); }
+    });
+
+    document.addEventListener('visibilitychange', () => { if (document.hidden){ stopLoops(); } else if (!video.paused){ startLoops(); } });
+
+    // Init defaults
+    charsetInput.value = PRESETS.dense;
+    updateDerived();
+
+    // --- VGA Auto for GL path: learn from downscaled frame and push to GL uniform ---
+    const autoPalCanvas = document.createElement('canvas'); autoPalCanvas.width = 96; autoPalCanvas.height = 96;
+    const autoPalCtx = autoPalCanvas.getContext('2d', {willReadFrequently:true});
+    function updateAutoPaletteGL(){
+      if (!window._glAscii) return;
+      if (paletteModeSel.value !== 'vga-auto') return;
+      if (!video.videoWidth || !video.videoHeight) return;
+      autoPalCtx.drawImage(video, 0,0, autoPalCanvas.width, autoPalCanvas.height);
+      const img = autoPalCtx.getImageData(0,0,autoPalCanvas.width, autoPalCanvas.height);
+      try{ requestAutoPalUpdate(img.data, 8, 1); }catch(e){}
+    }
+    setInterval(updateAutoPaletteGL, 100);
+  })();
+  </script>
+
+  <!-- === Video backend (unchanged) === -->
+  <script>
+  (function(){
+    const Has = {
+      secure: self.isSecureContext === true,
+      webcodecs: ('VideoFrame' in self) && ('MediaStreamTrackProcessor' in self),
+      rvfc: 'requestVideoFrameCallback' in HTMLVideoElement.prototype,
+      worker: !!window.Worker,
+      offscreen: typeof OffscreenCanvas !== 'undefined'
+    };
+
+    window.Backend = {
+      async start(video, dims, onResult){
+        const cols = dims.cols|0, rows = dims.rows|0;
+        if (Has.secure && Has.webcodecs && Has.worker && Has.offscreen) { return startWebCodecsWorker(video, cols, rows, onResult); }
+        if (Has.rvfc && Has.worker && Has.offscreen){ return startRvfcWorker(video, cols, rows, onResult); }
+        return startMainThread(video, cols, rows, onResult);
+      }
+    };
+
+    function startWebCodecsWorker(video, cols, rows, onResult){
+      const blob = new Blob([workerCode(cols, rows, /*useTP=*/true)], {type:'application/javascript'});
+      const w = new Worker(URL.createObjectURL(blob));
+      w.onmessage = (e)=>{ if (e.data && e.data.type==='result') onResult(e.data); };
+      const stream = video.captureStream?.() || video.mozCaptureStream?.();
+      if (!stream){ console.warn('captureStream not supported; falling back.'); return startRvfcWorker(video, cols, rows, onResult); }
+      const track = stream.getVideoTracks()[0];
+      try { w.postMessage({type:'track', track}, [track]); } catch (err) {
+        console.warn('Failed to transfer track, falling back:', err);
+        return startRvfcWorker(video, cols, rows, onResult);
+      }
+      return { stop(){ w.terminate(); } };
+    }
+
+    function startRvfcWorker(video, cols, rows, onResult){
+      const blob = new Blob([workerCode(cols, rows, /*useTP=*/false)], {type:'application/javascript'});
+      const w = new Worker(URL.createObjectURL(blob));
+      w.onmessage = (e)=>{ if (e.data && e.data.type==='result') onResult(e.data); };
+      let running = true, vfc = null;
+      const pump = async ()=>{
+        if (!running) return;
+        try {
+          const bmp = await createImageBitmap(video, {resizeWidth: cols, resizeHeight: rows, resizeQuality:'high'});
+          w.postMessage({type:'bitmap', bitmap:bmp}, [bmp]);
+        } catch {
+          const c = document.createElement('canvas'); c.width=cols; c.height=rows;
+          const cx = c.getContext('2d', {willReadFrequently:true});
+          try { cx.drawImage(video, 0,0, cols, rows); } catch {}
+          try { const bmp = await createImageBitmap(c); w.postMessage({type:'bitmap', bitmap:bmp}, [bmp]); } catch {}
+        }
+        vfc = video.requestVideoFrameCallback ? video.requestVideoFrameCallback(()=>pump()) : requestAnimationFrame(()=>pump());
+      };
+      pump();
+      return { stop(){ running=false; try{ video.cancelVideoFrameCallback?.(vfc) }catch{}; w.terminate(); } };
+    }
+
+    function startMainThread(video, cols, rows, onResult){
+      let running = true;
+      const c = document.createElement('canvas'); c.width=cols; c.height=rows;
+      const cx = c.getContext('2d', {willReadFrequently:true});
+      (function tick(){
+        if (!running) return;
+        try { cx.drawImage(video, 0,0, cols, rows); } catch {}
+        const img = cx.getImageData(0,0, cols, rows);
+        onResult({type:'result', cols, rows, rgba: img.data}, [img.data.buffer]);
+        requestAnimationFrame(tick);
+      })();
+      return { stop(){ running=false; } };
+    }
+
+    function workerCode(cols, rows, useTP){
+      return `
+        let cols=${cols}|0, rows=${rows}|0;
+        let off = (typeof OffscreenCanvas!=='undefined') ? new OffscreenCanvas(cols, rows) : null;
+        let ctx = off ? off.getContext('2d', {willReadFrequently:true}) : null;
+        function sendRGBA(){
+          if (!ctx) return;
+          const img = ctx.getImageData(0,0, cols, rows);
+          postMessage({type:'result', cols, rows, rgba: img.data}, [img.data.buffer]);
+        }
+        onmessage = async (e)=>{
+          const t = e.data && e.data.type;
+          if (t==='bitmap'){ if (ctx){ ctx.drawImage(e.data.bitmap,0,0); try{ e.data.bitmap.close&&e.data.bitmap.close(); }catch{}; sendRGBA(); } return; }
+          if (t==='track' && ${useTP?'true':'false'}){
+            const track = e.data.track;
+            try {
+              const proc = new MediaStreamTrackProcessor({track});
+              const reader = proc.readable.getReader();
+              while(true){
+                const {value:frame, done} = await reader.read();
+                if (done || !frame) break;
+                if (!ctx){ frame.close(); continue; }
+                let drawn=false;
+                try { ctx.drawImage(frame, 0,0, cols, rows); drawn=true; } catch{}
+                if (!drawn){
+                  try{
+                    const bmp = await createImageBitmap(frame, {resizeWidth: cols, resizeHeight: rows, resizeQuality:'high'});
+                    ctx.drawImage(bmp, 0,0);
+                    try{ bmp.close&&bmp.close(); }catch{}
+                    drawn=true;
+                  }catch{}
+                }
+                if (!drawn && frame.copyTo){
+                  try{
+                    const sw = frame.codedWidth||frame.displayWidth||frame.visibleRect?.width||cols;
+                    const sh = frame.codedHeight||frame.displayHeight||frame.visibleRect?.height||rows;
+                    const buf = new ArrayBuffer(sw*sh*4);
+                    const src = new Uint8ClampedArray(buf);
+                    await frame.copyTo(src, {format:'RGBA'});
+                    const img = ctx.createImageData(cols, rows); const dst = img.data;
+                    for (let y=0;y<rows;y++){
+                      const sy = Math.min(sh-1, Math.floor(y*sh/rows));
+                      for (let x=0;x<cols;x++){
+                        const sx = Math.min(sw-1, Math.floor(x*sw/cols));
+                        const si = (sy*sw + sx)*4; const di = (y*cols + x)*4;
+                        dst[di]=src[si]; dst[di+1]=src[si+1]; dst[di+2]=src[si+2]; dst[di+3]=255;
+                      }
+                    }
+                    ctx.putImageData(img,0,0); drawn=true;
+                  }catch{}
+                }
+                frame.close();
+                if (drawn) sendRGBA();
+              }
+            } catch (err){ postMessage({type:'error', reason: String(err&&err.message||err)}); }
+          }
+        };`;
+    }
+  })();
+  </script>
+
+  <!-- === WebGL ASCII Renderer (toggle) — HQLuma fixed, palettes wired, image controls === -->
+  <script>
+  (function(){
+    class GLAsciiRenderer {
+      constructor({canvas, video, onError, onInfo}) {
+        this.canvas = canvas; this.video = video;
+        this.onError = onError || (()=>{}); this.onInfo = onInfo || (()=>{});
+        this.opts = {
+          cols:160, rows:90, colorMode:'truecolor', paletteMode:'none', dither:'off', halfBlock:false,
+          charset:"@$B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\\\|()1{}[]?-_+~<>i!lI;:,\\\"^`'. ",
+          fontFamily:"ui-monospace,SFMono-Regular,Menlo,Consolas,monospace", glyphPx:{w:8,h:16},
+          pal16:[[0,0,0],[170,0,0],[0,170,0],[170,85,0],[0,0,170],[170,0,170],[0,170,170],[170,170,170],[85,85,85],[255,85,85],[85,255,85],[255,255,85],[85,85,255],[255,85,255],[85,255,255],[255,255,255]],
+          hqLuma:true, gamma:1.0, contrast:1.0, saturation:1.0, edgeBoost:0.0, sampleMode:0
+        };
+        this.active=false; this._raf=null; this._vfc=null; this._videoTexReady=false;
+        this._lastCpuMs=0;
+        this._dsFBO=null; this._dsTex=null; this._dsSize={w:0,h:0}; this._progDown=null; this._dsOK=false;
+      }
+      async init(){
+        const c=this.canvas;
+        const gl = c && c.getContext && (c.getContext('webgl',{alpha:false,antialias:false,preserveDrawingBuffer:false}) || c.getContext('webgl2',{alpha:false,antialias:false,preserveDrawingBuffer:false}));
+        if(!gl){ this.onError('WebGL not available'); return false; }
+        this.gl=gl;
+        try{
+          const canvasEl = this.canvas;
+          canvasEl.addEventListener('webglcontextlost', (e)=>{
+            e.preventDefault();
+            this.onError && this.onError('WebGL context lost — recovering…');
+          }, false);
+          canvasEl.addEventListener('webglcontextrestored', ()=>{
+            try{
+              this._buildAtlas(); this._buildGL(); this._resizeCanvasToGrid(); this.start();
+              this.onInfo && this.onInfo('WebGL context restored');
+            }catch(e){ this.onError && this.onError('Failed to restore GL: '+(e&&e.message||e)); }
+          }, false);
+        }catch{}
+ this._buildAtlas(); this._buildGL(); this.active=true; return true;
+      }
+      setOptions(o={}){
+        Object.assign(this.opts,o);
+        if (o.charset || o.fontFamily || o.glyphPx){ this._buildAtlas(); this._createOrUpdateAtlasTexture(); }
+        if (o.cols || o.rows) this._resizeCanvasToGrid();
+        if (typeof o.halfBlock==='boolean') this._useHalf=!!this.opts.halfBlock;
+        if (o.pal16) this._uploadPAL16();
+      }
+      start(){ if(!this.active) return; this._resizeCanvasToGrid();
+        const v=this.video;
+        const tick=()=>{ if(!this.active) return;
+          const t0=performance.now();
+          try{ this._renderFrame(); }catch(e){ this.onError(e.message); this.stop(); return; }
+          const t1=performance.now(); this._lastCpuMs = (t1-t0);
+          if (v && v.requestVideoFrameCallback){ this._vfc = v.requestVideoFrameCallback(()=>tick()); }
+          else { this._raf = requestAnimationFrame(()=>tick()); }
+        };
+        if (v && v.requestVideoFrameCallback){ this._vfc = v.requestVideoFrameCallback(()=>tick()); }
+        else { this._raf = requestAnimationFrame(()=>tick()); }
+      }
+      stop(){ this.active=false; try{ this.video && this.video.cancelVideoFrameCallback && this.video.cancelVideoFrameCallback(this._vfc);}catch{} cancelAnimationFrame(this._raf); }
+      _resizeCanvasToGrid(){ const {cols,rows,glyphPx}=this.opts; this.canvas.width=cols*glyphPx.w; this.canvas.height=rows*glyphPx.h; this.gl.viewport(0,0,this.canvas.width,this.canvas.height); this._allocDownsampleTarget(); }
+      _buildAtlas(){
+        const {charset,glyphPx,fontFamily}=this.opts;
+        const base = [' ','▀','▄','█'];
+        const seen = new Set(base);
+        for (const ch of charset){ if (!seen.has(ch)) base.push(ch), seen.add(ch); }
+        this._glyphList = base.join('');
+        const cols=Math.ceil(Math.sqrt(base.length)), rows=Math.ceil(base.length/cols);
+        const W=cols*glyphPx.w, H=rows*glyphPx.h;
+        const cvs=document.createElement('canvas'); cvs.width=W; cvs.height=H;
+        const ctx=cvs.getContext('2d'); ctx.clearRect(0,0,W,H);
+        ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.font=`${glyphPx.h}px ${fontFamily}`;
+        for(let i=0;i<base.length;i++){
+          const ch=base[i]; const x=(i%cols)*glyphPx.w + Math.floor(glyphPx.w/2); const y=Math.floor(i/cols)*glyphPx.h + Math.floor(glyphPx.h/2);
+          ctx.fillText(ch,x,y);
+        }
+        this._atlas={canvas:cvs, grid:{cols,rows}, cell:glyphPx, count:base.length};
+      }
+      _createOrUpdateAtlasTexture(){
+        const gl=this.gl, {canvas}=this._atlas;
+        if(!this._atlasTex) this._atlasTex=gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D,this._atlasTex);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+        gl.bindTexture(gl.TEXTURE_2D,null);
+      }
+      _buildGL(){ const gl=this.gl;
+        const vs='attribute vec2 a_pos; varying vec2 v_uv; void main(){ v_uv=(a_pos+1.0)*0.5; gl_Position=vec4(a_pos,0.0,1.0);}';
+        const fs_common=`precision mediump float; varying vec2 v_uv; uniform sampler2D uVideo,uAtlas; uniform sampler2D uCell;
+          uniform vec2 uCanvasPx,uCellPx,uGrid,uAtlasGrid; uniform float uCharsetCount;
+          uniform int uColorMode,uDither,uPaletteMode,uHQLuma,uSampleMode; // colorMode: 0 mono, 1 truecolor
+          uniform vec3 uPAL16[16];
+          uniform float uGamma,uContrast,uSaturation,uEdge;
+          float lumaFast(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }
+          float lumaHQ(vec3 c){ return dot(c, vec3(0.2126,0.7152,0.0722)); }
+          float LUMA(vec3 c){ return (uHQLuma==1)? lumaHQ(c) : lumaFast(c); }
+          float bayer2(vec2 p){ int x=int(mod(p.x,2.0)); int y=int(mod(p.y,2.0)); int t=(y==0)?(x==0?0:2):(x==0?3:1); return float(t)/4.0; }
+          float bayer4(vec2 p){ int x=int(mod(p.x,4.0)); int y=int(mod(p.y,4.0)); int m[16]; m[0]=0;m[1]=8;m[2]=2;m[3]=10;m[4]=12;m[5]=4;m[6]=14;m[7]=6;m[8]=3;m[9]=11;m[10]=1;m[11]=9;m[12]=15;m[13]=7;m[14]=13;m[15]=5; return float(m[y*4+x])/16.0; }
+          float ditherAdjust(vec2 cell){ if(uDither==1) return (bayer2(cell)-0.375)*0.15; if(uDither==2) return (bayer4(cell)-0.46875)*0.15; return 0.0; }
+          vec2 atlasUV(float index, vec2 withinCell){ float cols=uAtlasGrid.x; float rows=uAtlasGrid.y; float col=mod(index,cols); float row=floor(index/cols); vec2 base=vec2(col/cols,row/rows); vec2 step=vec2(1.0/cols,1.0/rows); return base+withinCell*step; }
+          float sd2(vec3 a, vec3 b){ vec3 d=a-b; return dot(d,d); }
+vec3 srgb2linear(vec3 c){ return pow(c, vec3(2.2)); }
+vec3 linear2srgb(vec3 c){ return pow(max(c,0.0), vec3(1.0/2.2)); }
+float sd2w(vec3 a, vec3 b){ float dl = LUMA(a)-LUMA(b); vec3 d=a-b; return dot(d,d) + 0.75*dl*dl; }
+          vec3 nearest16(vec3 c){ float best=1e9; vec3 outc=c; for(int i=0;i<16;i++){ vec3 q=uPAL16[i]/255.0; float d=sd2w(c, q); if(d<best){best=d; outc=q;} } return outc; }
+          float q6s(float v){ float s[6]; s[0]=0.0; s[1]=95.0/255.0; s[2]=135.0/255.0; s[3]=175.0/255.0; s[4]=215.0/255.0; s[5]=1.0; float best=s[0]; float bd=abs(v-s[0]); for(int i=1;i<6;i++){ float d=abs(v-s[i]); if(d<bd){bd=d; best=s[i];} } return best; }
+          vec3 qWebSafe(vec3 c){ return vec3(floor(c.r*255.0/51.0+0.5)*51.0/255.0, floor(c.g*255.0/51.0+0.5)*51.0/255.0, floor(c.b*255.0/51.0+0.5)*51.0/255.0); }
+          vec3 qXterm(vec3 c){ return vec3(q6s(c.r), q6s(c.g), q6s(c.b)); }
+          vec3 applyPalette(vec3 c, vec2 cell){
+            float bias = (uDither==0)? 0.0 : ( (uDither==1? (bayer2(cell)-0.5) : (bayer4(cell)-0.5)) * 0.06 );
+            vec3 cc = clamp(c + bias, 0.0, 1.0);
+            if(uPaletteMode==1) return nearest16(cc);
+            if(uPaletteMode==2){ float y = LUMA(cc); float t = floor(y*3.0+0.5)/3.0; return vec3(t); }
+            if(uPaletteMode==3) return qWebSafe(cc);
+            if(uPaletteMode==4) return qXterm(cc);
+            return cc;
+          }
+          vec3 adjustColor(vec3 c){ vec3 lin = srgb2linear(c); float Y = dot(lin, vec3(0.2126,0.7152,0.0722)); lin = mix(vec3(Y), lin, uSaturation); lin = (lin - 0.5) * uContrast + 0.5; lin = pow(max(lin, 0.0), vec3(1.0/max(0.001,uGamma))); return linear2srgb(clamp(lin, 0.0, 1.0)); }
+          float cellLum(vec2 cell){
+            vec2 uv=(cell+0.5)/uGrid;
+            vec3 c=texture2D(uCell,uv).rgb;
+            return LUMA(adjustColor(c));
+          }
+          float edgeTerm(vec2 cell){ if(uEdge<=0.0) return 0.0; vec2 uvC=(cell+0.5)/uGrid; float dx=LUMA(texture2D(uVideo, uvC+vec2(1.0/uGrid.x,0.0)).rgb)-LUMA(texture2D(uVideo, uvC-vec2(1.0/uGrid.x,0.0)).rgb); float dy=LUMA(texture2D(uVideo, uvC+vec2(0.0,1.0/uGrid.y)).rgb)-LUMA(texture2D(uVideo, uvC-vec2(0.0,1.0/uGrid.y)).rgb); float e=sqrt(dx*dx+dy*dy); return clamp(e*uEdge*0.75, 0.0, 0.25); }
+        `;
+        const fs_main=fs_common+`
+          void main(){
+            vec2 fragPx=v_uv*uCanvasPx;
+            vec2 cell=floor(fragPx/uCellPx);
+            vec2 inCell=mod(fragPx,uCellPx)/uCellPx;
+            // Luminance for glyph selection
+            float lum=cellLum(cell)+ditherAdjust(cell)+edgeTerm(cell);
+            lum = clamp(lum, 0.0, 1.0);
+            float idx=floor(lum*(uCharsetCount-1.0)+0.5);
+            vec2 uvA=atlasUV(idx,inCell);
+            vec4 g=texture2D(uAtlas,uvA);
+            // Base color (truecolor or mono)
+            vec2 uvC=(cell+0.5)/uGrid;
+            vec3 src=texture2D(uCell,uvC).rgb;
+            vec3 col = (uColorMode==1)? adjustColor(src) : vec3(lum);
+            col = applyPalette(col, cell);
+            float boost = 1.12;
+            gl_FragColor=vec4(clamp(col*boost,0.0,1.0), g.a) * g.a;
+          }`;
+        const fs_half=fs_common+`
+          void main(){
+            vec2 fragPx=v_uv*uCanvasPx;
+            vec2 cell=floor(fragPx/uCellPx);
+            vec2 inCell=mod(fragPx,uCellPx)/uCellPx;
+            vec2 uvT=vec2( (cell.x+0.5)/uGrid.x, (cell.y*2.0+0.5)/(uGrid.y*2.0));
+            vec2 uvB=vec2( (cell.x+0.5)/uGrid.x, (cell.y*2.0+1.5)/(uGrid.y*2.0));
+            vec3 top=texture2D(uCell,uvT).rgb;
+            vec3 bot=texture2D(uCell,uvB).rgb;
+            float lt=LUMA(adjustColor(top))+ditherAdjust(cell*vec2(1.0,2.0));
+            float lb=LUMA(adjustColor(bot))+ditherAdjust(cell*vec2(1.0,2.0)+vec2(0.0,1.0));
+            float t=0.5;
+            float pick=(lt>=t && lb>=t)?3.0:(lt>=t && lb<t)?1.0:(lt<t && lb>=t)?2.0:0.0; // [space,▀,▄,█]
+            vec2 uvA=atlasUV(pick,inCell);
+            vec4 g=texture2D(uAtlas,uvA);
+            vec3 fg=(uColorMode==1)?adjustColor(inCell.y<0.5?top:bot):vec3((lt+lb)*0.5);
+            fg = applyPalette(fg, cell);
+            float boost = 1.12;
+            gl_FragColor=vec4(clamp(fg*boost,0.0,1.0), g.a) * g.a;
+          }`;
+        const progMain=this._mk(vs,fs_main), progHalf=this._mk(vs,fs_half); this._progMain=progMain; this._progHalf=progHalf;
+        const fs_blit='precision mediump float; varying vec2 v_uv; uniform sampler2D uVideo; void main(){ gl_FragColor = texture2D(uVideo, v_uv); }';
+        this._progDown = this._mk(vs, fs_blit);
+        const quad=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+        gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1, -1,1,1,-1,1,1]),gl.STATIC_DRAW);
+        this._quad=quad;
+        const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+        this._videoTex=tex; gl.bindTexture(gl.TEXTURE_2D,null);
+        this._createOrUpdateAtlasTexture(); this._useHalf=!!this.opts.halfBlock;
+        this._uploadPAL16();
+      }
+      _uploadPAL16(){
+        const gl=this.gl;
+        const flat=[]; for(const c of this.opts.pal16){ flat.push(c[0],c[1],c[2]); }
+        gl.useProgram(this._progMain); gl.uniform3fv(gl.getUniformLocation(this._progMain,'uPAL16[0]'), new Float32Array(flat));
+        gl.useProgram(this._progHalf); gl.uniform3fv(gl.getUniformLocation(this._progHalf,'uPAL16[0]'), new Float32Array(flat));
+      }
+      _mk(vsSrc,fsSrc){
+        const gl=this.gl;
+        const vs=gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vs,vsSrc); gl.compileShader(vs);
+        if(!gl.getShaderParameter(vs,gl.COMPILE_STATUS)) throw new Error('VS: '+gl.getShaderInfoLog(vs));
+        const fs=gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fs,fsSrc); gl.compileShader(fs);
+        if(!gl.getShaderParameter(fs,gl.COMPILE_STATUS)) throw new Error('FS: '+gl.getShaderInfoLog(fs));
+        const p=gl.createProgram(); gl.attachShader(p,vs); gl.attachShader(p,fs); gl.linkProgram(p);
+        if(!gl.getProgramParameter(p,gl.LINK_STATUS)){ throw new Error('GL link error: '+gl.getProgramInfoLog(p)); } return p;
+      }
+      _renderFrame(){
+        const gl=this.gl, v=this.video; if(!v || v.readyState<2) return;
+        gl.bindTexture(gl.TEXTURE_2D,this._videoTex);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+        if(!this._videoTexReady){
+          gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,v);
+          this._videoTexReady=true;
+        } else {
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, v);
+        }
+        gl.bindTexture(gl.TEXTURE_2D,null);
+
+        const prog=this._useHalf?this._progHalf:this._progMain; gl.useProgram(prog);
+        const loc=gl.getAttribLocation(prog,'a_pos'); gl.bindBuffer(gl.ARRAY_BUFFER,this._quad);
+        gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+        const U=(n)=>gl.getUniformLocation(prog,n);
+        const U2=(n,x,y)=>gl.uniform2f(U(n),x,y), U1f=(n,x)=>gl.uniform1f(U(n),x), U1i=(n,x)=>gl.uniform1i(U(n),x);
+
+        /* Prepass: downsample video to per-cell texture */
+        let _useCellTex = false;
+        if (this._progDown && this._dsFBO && this._dsTex && this._dsOK && this._videoTexReady){
+          gl.bindFramebuffer(gl.FRAMEBUFFER, this._dsFBO);
+          gl.viewport(0,0,this._dsSize.w,this._dsSize.h);
+          gl.useProgram(this._progDown);
+          let locD=gl.getAttribLocation(this._progDown,'a_pos'); gl.bindBuffer(gl.ARRAY_BUFFER,this._quad);
+          gl.enableVertexAttribArray(locD); gl.vertexAttribPointer(locD,2,gl.FLOAT,false,0,0);
+          gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,this._videoTex); gl.uniform1i(gl.getUniformLocation(this._progDown,'uVideo'),0);
+          gl.drawArrays(gl.TRIANGLES,0,6);
+          gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+          gl.viewport(0,0,this.canvas.width,this.canvas.height);
+          _useCellTex = true;
+        }
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,this._videoTex); gl.uniform1i(U('uVideo'),0);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,this._atlasTex); gl.uniform1i(U('uAtlas'),1);
+        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,_useCellTex ? this._dsTex : this._videoTex); gl.uniform1i(U('uCell'),2);
+const {cols,rows,glyphPx,dither,colorMode,paletteMode,hqLuma,gamma,contrast,saturation,edgeBoost,sampleMode}=this.opts;
+        U2('uCanvasPx',this.canvas.width,this.canvas.height);
+        U2('uCellPx',glyphPx.w,glyphPx.h);
+        U2('uGrid',cols,rows);
+        U2('uAtlasGrid',this._atlas.grid.cols,this._atlas.grid.rows);
+        U1f('uCharsetCount',this._atlas.count);
+        U1i('uColorMode',colorMode==='truecolor'?1:0);
+        U1i('uDither',dither==='bayer2'?1:(dither==='bayer4'?2:0));
+        const pm = paletteMode==='none'?0 : (paletteMode==='pal16'?1 : (paletteMode==='gray4'?2 : (paletteMode==='websafe216'?3 : (paletteMode==='xterm256'?4:0))));
+        U1i('uPaletteMode', pm);
+        U1i('uHQLuma', hqLuma?1:0);
+        U1f('uGamma', gamma);
+        U1f('uContrast', contrast);
+        U1f('uSaturation', saturation);
+        U1f('uEdge', edgeBoost);
+        U1i('uSampleMode', sampleMode);
+
+        gl.drawArrays(gl.TRIANGLES,0,6);
+
+        // Update approximate GPU time to UI (CPU-side measure)
+        try{ const gpuOut=document.getElementById('gpuOut'); if (gpuOut) gpuOut.textContent = `CPU≈${this._lastCpuMs.toFixed(1)}ms`; }catch{}
+      }
+    }
+
+    // Hook restartBackend() so the WebGL renderer can take over when toggle is on
+    
+function glWorkerCode(){
+  return `
+    let canvas=null, gl=null;
+    let opts={cols:160,rows:90,glyphPx:{w:8,h:16},colorMode:'truecolor',paletteMode:'none',dither:'off',halfBlock:false,
+              hqLuma:true,gamma:1.0,contrast:1.0,saturation:1.0,edgeBoost:0.0,sampleMode:0,pal16:[[0,0,0],[170,0,0],[0,170,0],[170,85,0],[0,0,170],[170,0,170],[0,170,170],[170,170,170],[85,85,85],[255,85,85],[85,255,85],[255,255,85],[85,85,255],[255,85,255],[85,255,255],[255,255,255]], charset:" @$" };
+    let atlas=null, atlasTex=null, videoTex=null, quad=null, progMain=null, progHalf=null, progDown=null;
+    let useHalf=false, videoTexReady=false, dsFBO=null, dsTex=null, dsOK=false, dsSize={w:0,h:0};
+
+    function mkShader(t,s){ const o=gl.createShader(t); gl.shaderSource(o,s); gl.compileShader(o); if(!gl.getShaderParameter(o,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; }
+    function mkProgram(vs,fs){ const p=gl.createProgram(); gl.attachShader(p,mkShader(gl.VERTEX_SHADER,vs)); gl.attachShader(p,mkShader(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(p); if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)); return p; }
+
+    function buildAtlas(){
+      const base=[' ','\u2580','\u2584','\u2588']; const seen=new Set(base);
+      for(const ch of (opts.charset||'')){ if(!seen.has(ch)){ base.push(ch); seen.add(ch); } }
+      const C=Math.ceil(Math.sqrt(base.length)), R=Math.ceil(base.length/C), W=C*opts.glyphPx.w, H=R*opts.glyphPx.h;
+      const cvs=new OffscreenCanvas(W,H), ctx=cvs.getContext('2d'); ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.font=opts.glyphPx.h+'px '+(opts.fontFamily||'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace');
+      for(let i=0;i<base.length;i++){ const x=(i%C)*opts.glyphPx.w+Math.floor(opts.glyphPx.w/2), y=Math.floor(i/C)*opts.glyphPx.h+Math.floor(opts.glyphPx.h/2); ctx.fillText(base[i],x,y); }
+      atlas={canvas:cvs, grid:{cols:C,rows:R}, cell:opts.glyphPx, count:base.length};
+    }
+
+    function createOrUpdateAtlasTexture(){ if(!atlasTex) atlasTex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,atlasTex); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,atlas.canvas); gl.bindTexture(gl.TEXTURE_2D,null); }
+
+    function uploadPAL16(){ const flat=[]; for(const c of (opts.pal16||[])) flat.push(c[0],c[1],c[2]);
+      gl.useProgram(progMain); gl.uniform3fv(gl.getUniformLocation(progMain,'uPAL16[0]'),new Float32Array(flat));
+      gl.useProgram(progHalf); gl.uniform3fv(gl.getUniformLocation(progHalf,'uPAL16[0]'),new Float32Array(flat)); }
+
+    function allocDownsampleTarget(){ if(!dsFBO) dsFBO=gl.createFramebuffer(); if(!dsTex) dsTex=gl.createTexture(); const w=opts.cols|0,h=opts.halfBlock?(opts.rows*2|0):(opts.rows|0);
+      if(dsSize.w===w && dsSize.h===h) return; dsSize={w,h}; gl.bindTexture(gl.TEXTURE_2D,dsTex);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null); gl.bindFramebuffer(gl.FRAMEBUFFER,dsFBO); gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,dsTex,0); dsOK=(gl.checkFramebufferStatus(gl.FRAMEBUFFER)===gl.FRAMEBUFFER_COMPLETE); gl.bindFramebuffer(gl.FRAMEBUFFER,null); }
+
+    function buildGL(){
+      const vs='attribute vec2 a_pos; varying vec2 v_uv; void main(){ v_uv=(a_pos+1.0)*0.5; gl_Position=vec4(a_pos,0.0,1.0);}';
+      const fsC=\`precision mediump float; varying vec2 v_uv; uniform sampler2D uVideo,uAtlas; uniform sampler2D uCell; uniform vec2 uCanvasPx,uCellPx,uGrid,uAtlasGrid; uniform float uCharsetCount; uniform int uColorMode,uDither,uPaletteMode,uHQLuma,uSampleMode; uniform vec3 uPAL16[16]; uniform float uGamma,uContrast,uSaturation,uEdge;
+        float lumaFast(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); } float lumaHQ(vec3 c){ return dot(c, vec3(0.2126,0.7152,0.0722)); } float LUMA(vec3 c){ return (uHQLuma==1)? lumaHQ(c) : lumaFast(c); }
+        float bayer2(vec2 p){ int x=int(mod(p.x,2.0)); int y=int(mod(p.y,2.0)); int t=(y==0)?(x==0?0:2):(x==0?3:1); return float(t)/4.0; } float bayer4(vec2 p){ int x=int(mod(p.x,4.0)); int y=int(mod(p.y,4.0)); int m[16]; m[0]=0;m[1]=8;m[2]=2;m[3]=10;m[4]=12;m[5]=4;m[6]=14;m[7]=6;m[8]=3;m[9]=11;m[10]=1;m[11]=9;m[12]=15;m[13]=7;m[14]=13;m[15]=5; return float(m[y*4+x])/16.0; }
+        float ditherAdjust(vec2 cell){ if(uDither==1) return (bayer2(cell)-0.375)*0.15; if(uDither==2) return (bayer4(cell)-0.46875)*0.15; return 0.0; }
+        vec2 atlasUV(float i, vec2 w){ float C=uAtlasGrid.x,R=uAtlasGrid.y; float c=mod(i,C), r=floor(i/C); vec2 b=vec2(c/C,r/R), s=vec2(1.0/C,1.0/R); return b+w*s; }
+        float sd2(vec3 a, vec3 b){ vec3 d=a-b; return dot(d,d); } vec3 srgb2linear(vec3 c){ return pow(c, vec3(2.2)); } vec3 linear2srgb(vec3 c){ return pow(max(c,0.0), vec3(1.0/2.2)); } float sd2w(vec3 a, vec3 b){ float dl=LUMA(a)-LUMA(b); vec3 d=a-b; return dot(d,d)+0.75*dl*dl; }
+        vec3 nearest16(vec3 c){ float best=1e9; vec3 outc=c; for(int i=0;i<16;i++){ vec3 q=uPAL16[i]/255.0; float d=sd2w(c,q); if(d<best){best=d; outc=q;} } return outc; }
+        float q6s(float v){ float s[6]; s[0]=0.0; s[1]=95.0/255.0; s[2]=135.0/255.0; s[3]=175.0/255.0; s[4]=215.0/255.0; s[5]=1.0; float best=s[0]; float bd=abs(v-s[0]); for(int i=1;i<6;i++){ float d=abs(v-s[i]); if(d<bd){bd=d; best=s[i];} } return best; }
+        vec3 qWebSafe(vec3 c){ return vec3(floor(c.r*255.0/51.0+0.5)*51.0/255.0, floor(c.g*255.0/51.0+0.5)*51.0/255.0, floor(c.b*255.0/51.0+0.5)*51.0/255.0); } vec3 qXterm(vec3 c){ return vec3(q6s(c.r),q6s(c.g),q6s(c.b)); }
+        vec3 applyPalette(vec3 c, vec2 cell){ float bias=(uDither==0)?0.0:((uDither==1?(bayer2(cell)-0.5):(bayer4(cell)-0.5))*0.06); vec3 cc=clamp(c + bias,0.0,1.0); if(uPaletteMode==1) return nearest16(cc); if(uPaletteMode==2){ float y=LUMA(cc); float t=floor(y*3.0+0.5)/3.0; return vec3(t);} if(uPaletteMode==3) return qWebSafe(cc); if(uPaletteMode==4) return qXterm(cc); return cc; }
+        vec3 adjustColor(vec3 c){ vec3 lin=srgb2linear(c); float Y=dot(lin, vec3(0.2126,0.7152,0.0722)); lin=mix(vec3(Y), lin, uSaturation); lin=(lin-0.5)*uContrast+0.5; lin=pow(max(lin,0.0), vec3(1.0/max(0.001,uGamma))); return linear2srgb(clamp(lin, 0.0, 1.0)); }
+        float cellLum(vec2 cell){ vec2 uv=(cell+0.5)/uGrid; vec3 c=texture2D(uCell,uv).rgb; return LUMA(adjustColor(c)); } \`;
+      const fs_main = fsC + \`void main(){ vec2 fp=v_uv*uCanvasPx; vec2 cell=floor(fp/uCellPx); vec2 inCell=mod(fp,uCellPx)/uCellPx; float lum=cellLum(cell)+ditherAdjust(cell); lum=clamp(lum,0.0,1.0); float idx=floor(lum*(uCharsetCount-1.0)+0.5); vec2 uvA=atlasUV(idx,inCell); vec4 g=texture2D(uAtlas,uvA); vec2 uvC=(cell+0.5)/uGrid; vec3 src=texture2D(uCell,uvC).rgb; vec3 col=(uColorMode==1)?adjustColor(src):vec3(lum); col=applyPalette(col,cell); float boost=1.12; gl_FragColor=vec4(clamp(col*boost,0.0,1.0), g.a)*g.a; }\`;
+      const fs_half = fsC + \`void main(){ vec2 fp=v_uv*uCanvasPx; vec2 cell=floor(fp/uCellPx); vec2 inCell=mod(fp,uCellPx)/uCellPx; vec2 uvT=vec2((cell.x+0.5)/uGrid.x,(cell.y*2.0+0.5)/(uGrid.y*2.0)); vec2 uvB=vec2((cell.x+0.5)/uGrid.x,(cell.y*2.0+1.5)/(uGrid.y*2.0)); vec3 top=texture2D(uCell,uvT).rgb, bot=texture2D(uCell,uvB).rgb; float lt=LUMA(adjustColor(top))+ditherAdjust(cell*vec2(1.0,2.0)); float lb=LUMA(adjustColor(bot))+ditherAdjust(cell*vec2(1.0,2.0)+vec2(0.0,1.0)); float t=0.5; float pick=(lt>=t && lb>=t)?3.0:(lt>=t && lb<t)?1.0:(lt<t && lb>=t)?2.0:0.0; vec2 uvA=atlasUV(pick,inCell); vec4 g=texture2D(uAtlas,uvA); vec3 fg=(uColorMode==1)?adjustColor(inCell.y<0.5?top:bot):vec3((lt+lb)*0.5); fg=applyPalette(fg,cell); float boost=1.12; gl_FragColor=vec4(clamp(fg*boost,0.0,1.0), g.a)*g.a; }\`;
+      const vs='attribute vec2 a_pos; varying vec2 v_uv; void main(){ v_uv=(a_pos+1.0)*0.5; gl_Position=vec4(a_pos,0.0,1.0);}';
+      progMain=mkProgram(vs,fs_main); progHalf=mkProgram(vs,fs_half);
+      const fs_blit='precision mediump float; varying vec2 v_uv; uniform sampler2D uVideo; void main(){ gl_FragColor=texture2D(uVideo,v_uv);}'; progDown=mkProgram(vs,fs_blit);
+      quad=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,quad); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+      videoTex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,videoTex); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE); gl.bindTexture(gl.TEXTURE_2D,null);
+      createOrUpdateAtlasTexture(); useHalf=!!opts.halfBlock; uploadPAL16(); allocDownsampleTarget();
+    }
+
+    function resizeCanvas(){ canvas.width=opts.cols*opts.glyphPx.w; canvas.height=opts.rows*opts.glyphPx.h; gl.viewport(0,0,canvas.width,canvas.height); }
+
+    function renderOnce(){
+      gl.bindTexture(gl.TEXTURE_2D,videoTex); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+      if(!videoTexReady){ if(typeof currentBitmap!=='undefined' && currentBitmap){ gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,currentBitmap); } videoTexReady=true; }
+      else { if(typeof currentBitmap!=='undefined' && currentBitmap){ gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,gl.RGBA,gl.UNSIGNED_BYTE,currentBitmap); } }
+      gl.bindTexture(gl.TEXTURE_2D,null);
+      const prog=useHalf?progHalf:progMain; gl.useProgram(prog);
+      const loc=gl.getAttribLocation(prog,'a_pos'); gl.bindBuffer(gl.ARRAY_BUFFER,quad); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+      const U=(n)=>gl.getUniformLocation(prog,n); const U2=(n,x,y)=>gl.uniform2f(U(n),x,y), U1f=(n,x)=>gl.uniform1f(U(n),x), U1i=(n,x)=>gl.uniform1i(U(n),x);
+      let _useCell=false; if(progDown && dsFBO && dsTex && dsOK && videoTexReady){ gl.bindFramebuffer(gl.FRAMEBUFFER,dsFBO); gl.viewport(0,0,dsSize.w,dsSize.h); gl.useProgram(progDown); let locD=gl.getAttribLocation(progDown,'a_pos'); gl.bindBuffer(gl.ARRAY_BUFFER,quad); gl.enableVertexAttribArray(locD); gl.vertexAttribPointer(locD,2,gl.FLOAT,false,0,0); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,videoTex); gl.uniform1i(gl.getUniformLocation(progDown,'uVideo'),0); gl.drawArrays(gl.TRIANGLES,0,6); gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.viewport(0,0,canvas.width,canvas.height); _useCell=true; }
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,videoTex); gl.uniform1i(U('uVideo'),0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,atlasTex); gl.uniform1i(U('uAtlas'),1);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,_useCell?dsTex:videoTex); gl.uniform1i(U('uCell'),2);
+      U2('uCanvasPx',canvas.width,canvas.height); U2('uCellPx',opts.glyphPx.w,opts.glyphPx.h); U2('uGrid',opts.cols,opts.rows); U2('uAtlasGrid',atlas.grid.cols,atlas.grid.rows); U1f('uCharsetCount',atlas.count);
+      U1i('uColorMode',opts.colorMode==='truecolor'?1:0); U1i('uDither',opts.dither==='bayer2'?1:(opts.dither==='bayer4'?2:0));
+      const pm=opts.paletteMode==='none'?0:(opts.paletteMode==='pal16'?1:(opts.paletteMode==='gray4'?2:(opts.paletteMode==='websafe216'?3:(opts.paletteMode==='xterm256'?4:0)))); U1i('uPaletteMode',pm);
+      U1i('uHQLuma',opts.hqLuma?1:0); U1f('uGamma',opts.gamma); U1f('uContrast',opts.contrast); U1f('uSaturation',opts.saturation); U1f('uEdge',opts.edgeBoost); U1i('uSampleMode',opts.sampleMode);
+      gl.drawArrays(gl.TRIANGLES,0,6);
+    }
+
+    let running=false, reader=null, currentBitmap=null;
+    async function pumpFramesFromTrack(track){
+      try{
+        const proc = new MediaStreamTrackProcessor({track});
+        reader = proc.readable.getReader();
+        while(running){
+          const {value:frame,done} = await reader.read();
+          if (done || !frame) break;
+          try{ currentBitmap = await createImageBitmap(frame, {resizeWidth: opts.cols, resizeHeight: (opts.halfBlock?opts.rows*2:opts.rows), resizeQuality:'high'}); }catch{}
+          try{ frame.close(); }catch{}
+          try{ renderOnce(); }catch(e){}
+          try{ if(currentBitmap && currentBitmap.close) currentBitmap.close(); }catch{}
+          currentBitmap=null;
+        }
+      }catch(e){}
+    }
+
+    onmessage = async (e)=>{
+      const d=e.data; if(!d) return;
+      if (d.type==='init'){
+        canvas = d.canvas;
+        gl = canvas.getContext('webgl',{alpha:false,antialias:false,preserveDrawingBuffer:false}) || canvas.getContext('webgl2',{alpha:false,antialias:false,preserveDrawingBuffer:false});
+        opts = Object.assign(opts, d.opts||{}); opts.fontFamily=d.fontFamily||opts.fontFamily;
+        buildAtlas(); resizeCanvas(); buildGL(); running=true; postMessage({type:'ready'}); return;
+      }
+      if (d.type==='opts'){
+        Object.assign(opts, d.opts||{});
+        if (d.opts && (d.opts.cols || d.opts.rows)){ resizeCanvas(); allocDownsampleTarget(); }
+        if (d.opts && d.opts.glyphPx){ buildAtlas(); createOrUpdateAtlasTexture(); }
+        if (d.opts && d.opts.pal16){ uploadPAL16(); }
+        return;
+      }
+      if (d.type==='track'){ running=true; pumpFramesFromTrack(d.track); return; }
+      if (d.type==='stop'){ running=false; try{ reader && reader.releaseLock && reader.releaseLock(); }catch{} close(); }
+    };
+  `;
+}
+
+    
+function startGlOffscreenWorker(video, canvas){
+  if (!('transferControlToOffscreen' in canvas) || !('Worker' in window)) return null;
+  try{
+    const off = canvas.transferControlToOffscreen();
+    const blob = new Blob([glWorkerCode()], {type:'application/javascript'});
+    const w = new Worker(URL.createObjectURL(blob));
+    const val=(id)=>{ const el=document.getElementById(id); return el?el.value:null; };
+    const chk=(id)=>{ const el=document.getElementById(id); return !!(el && el.checked); };
+    const uiColorMode = val('colorMode') || 'fg16';
+    let paletteMode = 'none';
+    if (uiColorMode==='fg16') paletteMode='pal16';
+    else if (uiColorMode==='gray4') paletteMode='gray4';
+    else if (uiColorMode==='fg216') paletteMode='websafe216';
+    else if (uiColorMode==='xterm256') paletteMode='xterm256';
+    const ditherVal = val('dither') || 'off';
+    const halfBlock = chk('halfBlock');
+    const hq = chk('hqLuma');
+    const gamma = parseFloat(val('gamma')||'1.0');
+    const contrast = parseFloat(val('contrast')||'1.0');
+    const saturation = parseFloat(val('saturation')||'1.0');
+    const edge = parseFloat(val('edgeBoost')||'0.0');
+    const sampleMode = chk('msaa4') ? 1 : 0;
+    const fontSel = document.getElementById('fontFamily'); const fontFamily = fontSel ? fontSel.value : "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+    const cols = Math.max(16, Math.floor(canvas.width / 8));
+    const rows = Math.max(8, Math.floor(canvas.height / 16));
+    function getPal16(name){
+      switch(name){
+        case 'win16': return [[0,0,0],[128,0,0],[0,128,0],[128,128,0],[0,0,128],[128,0,128],[0,128,128],[192,192,192],[128,128,128],[255,0,0],[0,255,0],[255,255,0],[0,0,255],[255,0,255],[0,255,255],[255,255,255]];
+        case 'ansi16': return [[0,0,0],[128,0,0],[0,128,0],[128,128,0],[0,0,128],[128,0,128],[0,128,128],[192,192,192],[128,128,128],[255,0,0],[0,255,0],[255,255,0],[0,0,255],[255,0,255],[0,255,255],[255,255,255]];
+        case 'vga16': return [[0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],[85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]];
+        case 'cga16': return [[0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],[85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]];
+        case 'gray16': { const a=[]; for(let i=0;i<16;i++){ const v=i*17; a.push([v,v,v]); } return a; }
+        case 'xterm16': return [[0,0,0],[205,0,0],[0,205,0],[205,205,0],[0,0,238],[205,0,205],[0,205,205],[229,229,229],[127,127,127],[255,0,0],[0,255,0],[255,255,0],[92,92,255],[255,0,255],[0,255,255],[255,255,255]];
+        case 'dos':
+        default: return [[0,0,0],[170,0,0],[0,170,0],[170,85,0],[0,0,170],[170,0,170],[0,170,170],[170,170,170],[85,85,85],[255,85,85],[85,255,85],[255,255,85],[85,85,255],[255,85,255],[85,255,255],[255,255,255]];
+      }
+    }
+    const palName = (document.getElementById('paletteMode')||{}).value || 'dos';
+    const pal16 = getPal16(palName);
+    const charset = (document.getElementById('charset')||{}).value || "@$B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
+    w.postMessage({type:'init', canvas: off, opts:{cols,rows,glyphPx:{w:8,h:16}, colorMode:(uiColorMode==='fullcolor')?'truecolor':'mono', paletteMode, dither:ditherVal, halfBlock:!!halfBlock, pal16, hqLuma:!!hq, gamma, contrast, saturation, edgeBoost:edge, sampleMode, charset, fontFamily}}, [off]);
+    const stream = video.captureStream?.() || video.mozCaptureStream?.();
+    if (stream){
+      const track = stream.getVideoTracks()[0];
+      try{ w.postMessage({type:'track', track}, [track]); }catch(e){}
+    }
+    // UI sync
+    const sendOpts = function(){
+      const uiColorMode = (document.getElementById('colorMode')||{}).value || 'fg16';
+      let paletteMode = 'none'; if (uiColorMode==='fg16') paletteMode='pal16'; else if (uiColorMode==='gray4') paletteMode='gray4'; else if (uiColorMode==='fg216') paletteMode='websafe216'; else if (uiColorMode==='xterm256') paletteMode='xterm256';
+      const halfBlock = !!((document.getElementById('halfBlock')||{}).checked);
+      const dither = (document.getElementById('dither')||{}).value || 'off';
+      const gamma = parseFloat((document.getElementById('gamma')||{}).value||'1.0');
+      const contrast = parseFloat((document.getElementById('contrast')||{}).value||'1.0');
+      const saturation = parseFloat((document.getElementById('saturation')||{}).value||'1.0');
+      const edge = parseFloat((document.getElementById('edgeBoost')||{}).value||'0.0');
+      const sampleMode = ((document.getElementById('msaa4')||{}).checked)?1:0;
+      // Palette
+      const palName = (document.getElementById('paletteMode')||{}).value || 'dos';
+      const pal16 = getPal16(palName);
+      w.postMessage({type:'opts', opts:{ paletteMode, halfBlock, dither, gamma, contrast, saturation, edgeBoost:edge, sampleMode, pal16 }});
+    };
+    ['colorMode','paletteMode','dither','halfBlock','gamma','contrast','saturation','edgeBoost','msaa4'].forEach(function(id){
+      var el=document.getElementById(id); if(el){ var ev=(el.tagName==='SELECT')?'change':'input'; el.addEventListener(ev, sendOpts); }
+    });
+    return { stop(){ try{ w.postMessage({type:'stop'});}catch(e){} try{ w.terminate(); }catch(e){} }, worker:w };
+  }catch(e){ console.warn('Offscreen worker failed', e); return null; }
+}
+
+function hookRestart(){
+      if (window.__wrappedRestartBackend) return;
+      if (typeof window.restartBackend !== 'function'){ setTimeout(hookRestart, 50); return; }
+      const orig = window.restartBackend;
+      window.__wrappedRestartBackend = true;
+      window.restartBackend = async function(){
+        try{
+          const useWebGL = !!(document.getElementById('useWebGL') && document.getElementById('useWebGL').checked);
+          const usingPre = !!((document.getElementById('usePre')||{}).checked);
+          if (!useWebGL || usingPre) return orig.apply(this, arguments);
+
+          const video = document.getElementById('video') || document.querySelector('video');
+          const canvas = document.getElementById('ascii');
+          if (!video || !canvas) return orig.apply(this, arguments);
+
+                    if (typeof OffscreenCanvas!=='undefined' && !!window.Worker){ const h=startGlOffscreenWorker(video, document.getElementById('ascii')); if(h){ try{ if(window.backendHandle&&window.backendHandle.stop) window.backendHandle.stop(); }catch{} window.backendHandle=h; var ro=document.getElementById('rendererOut'); if(ro) ro.textContent='WebGL (Offscreen worker)'; return; } }
+const W = (window.workCanvas && window.workCanvas.width)  ? window.workCanvas.width  : Math.floor(canvas.width/8);
+          const H = (window.workCanvas && window.workCanvas.height) ? window.workCanvas.height : Math.floor(canvas.height/16);
+          const val = (id)=>{ const el=document.getElementById(id); return el?el.value:null; };
+          const chk = (id)=>{ const el=document.getElementById(id); return !!(el && el.checked); };
+
+          const uiColorMode = val('colorMode') || 'fg16';
+          const ditherVal = val('dither') || 'off';
+          const halfBlock = chk('halfBlock');
+          const palSel = val('paletteMode') || 'dos';
+          const hq = chk('hqLuma');
+          const gamma = parseFloat(val('gamma')||'1.0');
+          const contrast = parseFloat(val('contrast')||'1.0');
+          const saturation = parseFloat(val('saturation')||'1.0');
+          const edge = parseFloat(val('edgeBoost')||'0.0');
+          const sampleMode = chk('msaa4') ? 1 : 0;
+
+          // Map color mode & palette selection to shader modes
+          let shaderPalette = 'none';
+          if (uiColorMode==='fg16'){ shaderPalette = 'pal16'; }
+          else if (uiColorMode==='gray4'){ shaderPalette = 'gray4'; }
+          else if (uiColorMode==='fg216'){ shaderPalette = 'websafe216'; }
+          else if (uiColorMode==='xterm256'){ shaderPalette = 'xterm256'; }
+          else if (uiColorMode==='fullcolor'){ shaderPalette = 'none'; }
+
+          // Choose 16-color set per palette dropdown (for pal16 mode)
+          function getPal16(name){
+            switch(name){
+              case 'win16': return [[0,0,0],[128,0,0],[0,128,0],[128,128,0],[0,0,128],[128,0,128],[0,128,128],[192,192,192],[128,128,128],[255,0,0],[0,255,0],[255,255,0],[0,0,255],[255,0,255],[0,255,255],[255,255,255]];
+              case 'ansi16': return [[0,0,0],[128,0,0],[0,128,0],[128,128,0],[0,0,128],[128,0,128],[0,128,128],[192,192,192],[128,128,128],[255,0,0],[0,255,0],[255,255,0],[0,0,255],[255,0,255],[0,255,255],[255,255,255]];
+              case 'vga16': return [[0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],[85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]];
+              case 'cga16': return [[0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],[85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]];
+              case 'gray16': { const a=[]; for(let i=0;i<16;i++){ const v=i*17; a.push([v,v,v]); } return a; }
+              case 'xterm16': return [[0,0,0],[205,0,0],[0,205,0],[205,205,0],[0,0,238],[205,0,205],[0,205,205],[229,229,229],[127,127,127],[255,0,0],[0,255,0],[255,255,0],[92,92,255],[255,0,255],[0,255,255],[255,255,255]];
+              case 'dos':
+              default: return [[0,0,0],[170,0,0],[0,170,0],[170,85,0],[0,0,170],[170,0,170],[0,170,170],[170,170,170],[85,85,85],[255,85,85],[85,255,85],[255,255,85],[85,85,255],[255,85,255],[85,255,255],[255,255,255]];
+            }
+          }
+          let pal16 = getPal16(palSel);
+
+          // If VGA auto requested in dropdown and using a 16-color mode, keep shader in pal16 and let outer loop update uPAL16 periodically
+          if (palSel==='vga-auto' && uiColorMode==='fg16'){ shaderPalette = 'pal16'; /* uPAL16 will be updated by outer timer */ }
+
+          const glr = new GLAsciiRenderer({ canvas, video,
+            onError:(m)=>console.warn('[GLASCII]',m), onInfo:(m)=>console.log('[GLASCII]',m) });
+          const ok = await glr.init();
+          if (!ok) return orig.apply(this, arguments);
+
+          glr.setOptions({
+            cols: W, rows: H,
+            colorMode: (uiColorMode==='fullcolor')?'truecolor':'mono',
+            paletteMode: shaderPalette,
+            dither: ditherVal==='bayer2'?'bayer2':(ditherVal==='bayer4'?'bayer4':'off'),
+            halfBlock: !!halfBlock,
+            pal16: pal16,
+            hqLuma: !!hq,
+            gamma, contrast, saturation, edgeBoost: edge, sampleMode
+          });
+          glr.start();
+          window._glAscii = glr;
+          try{ if (window.backendHandle && window.backendHandle.stop) window.backendHandle.stop(); }catch{}
+          window.backendHandle = { stop(){ try{ window._glAscii && window._glAscii.stop(); }catch{} } };
+          var ro=document.getElementById('rendererOut'); if (ro) ro.textContent='WebGL (ASCII shader)';
+          return;
+        }catch(e){
+          console.warn('WebGL toggle path failed, falling back:', e);
+          return orig.apply(this, arguments);
+        }
+      };
+    }
+    if (document.readyState === 'complete' || document.readyState === 'interactive') hookRestart();
+    else document.addEventListener('DOMContentLoaded', hookRestart);
+  })();
+  </script>
+
+
+  
+<script>
+(function(){
+  function workerCode(){
+    return `
+      let centers=null, counts=null, sums=null, frames=0, k=16;
+      function initCenters(data, step){
+        centers=new Float32Array(k*3); counts=new Uint32Array(k); sums=new Float32Array(k*3);
+        const N=(data.length/4)|0, stride=Math.max(1, Math.floor((N/step)/k)); let idx=0;
+        for(let i=0;i<k;i++){ const p=((idx*step)|0)*4; centers[i*3+0]=data[p]; centers[i*3+1]=data[p+1]; centers[i*3+2]=data[p+2]; idx+=stride; }
+        frames=0;
+      }
+      function iter(data, iters, step){
+        if(!centers) initCenters(data, step); const K=k;
+        for(let t=0;t<iters;t++){
+          counts.fill(0); sums.fill(0);
+          const N=(data.length/4)|0;
+          for(let i=0;i<N;i+=step){
+            const p=i*4; const r=data[p], g=data[p+1], b=data[p+2];
+            let best=0, bestd=1e20;
+            for(let c=0;c<K;c++){ const dr=r-centers[c*3+0], dg=g-centers[c*3+1], db=b-centers[c*3+2]; const d=dr*dr+dg*dg+db*db; if(d<bestd){ bestd=d; best=c; } }
+            counts[best]++; sums[best*3+0]+=r; sums[best*3+1]+=g; sums[best*3+2]+=b;
+          }
+          for(let c=0;c<K;c++){ const cnt=counts[c]||1; centers[c*3+0]=sums[c*3+0]/cnt; centers[c*3+1]=sums[c*3+1]/cnt; centers[c*3+2]=sums[c*3+2]/cnt; }
+          frames++;
+        }
+      }
+      onmessage=(e)=>{ const d=e.data||{}; if(d.type==='run'){ const data=new Uint8ClampedArray(d.buf); const iters=d.iters|0||1; const step=d.step|0||8; if(!centers) initCenters(data, step); iter(data, iters, step); const out=new Uint8Array(k*3); for(let i=0;i<k;i++){ out[i*3+0]=Math.max(0,Math.min(255,Math.round(centers[i*3+0]))); out[i*3+1]=Math.max(0,Math.min(255,Math.round(centers[i*3+1]))); out[i*3+2]=Math.max(0,Math.min(255,Math.round(centers[i*3+2]))); } postMessage({type:'pal16', pal: out, frames}); } if(d.type==='reset'){ centers=null; frames=0; } };
+    `;
+  }
+  window.__autoPal = { worker:null, pal16:null, ready:false };
+  window.ensureAutoPalWorker = function(){
+    if (window.__autoPal.worker) return window.__autoPal.worker;
+    const w=new Worker(URL.createObjectURL(new Blob([workerCode()], {type:'application/javascript'})));
+    w.onmessage=(e)=>{
+      if (!e.data) return;
+      if (e.data.type==='pal16'){
+        const a=e.data.pal; const pal=[]; for(let i=0;i<16;i++){ pal.push([a[i*3+0],a[i*3+1],a[i*3+2]]); }
+        window.__autoPal.pal16 = pal; window.__autoPal.ready = true;
+        if (window._glAscii && typeof window._glAscii.setOptions==='function'){ window._glAscii.setOptions({ pal16: pal }); }
+        if (window.backendHandle && window.backendHandle.worker){ try{ window.backendHandle.worker.postMessage({type:'opts', opts:{pal16: pal}}); }catch(e){} }
+      }
+    };
+    window.__autoPal.worker = w;
+    return w;
+  };
+  window.requestAutoPalUpdate = function(imgData, step, iters){
+    try{ const w=window.ensureAutoPalWorker(); var buf = (imgData.buffer.byteLength===imgData.byteLength) ? imgData.buffer.slice(0) : imgData.slice(0).buffer; w.postMessage({type:'run', buf:buf, step: step|0||8, iters: iters|0||1}, [buf]); }catch(e){}
+  };
+  window.resetAutoPal = function(){ try{ if(window.__autoPal.worker) window.__autoPal.worker.postMessage({type:'reset'}); }catch(e){} window.__autoPal.pal16=null; window.__autoPal.ready=false; };
+})();
+</script>
+
+<!-- === Draggable / Resizable Stage + Fit-to-Size Recompute === -->
+  <script>
+  (function(){
+    const stage = document.getElementById('stage');
+    const resizeHandle = document.getElementById('resizeHandle');
+    const floatBtn = document.getElementById('floatBtn');
+    const resetViewBtn = document.getElementById('resetViewBtn');
+    const mFloat = document.getElementById('mFloat');
+    const asciiCanvas = document.getElementById('ascii');
+    const scaleInput = document.getElementById('scale');
+    const scaleLabel = document.getElementById('scaleLabel');
+    const status = document.getElementById('status');
+
+    function isFloating(){ return stage.classList.contains('floating'); }
+    function toggleFloat(){
+      if (isFloating()){
+        stage.classList.remove('floating');
+        stage.style.left=''; stage.style.top=''; stage.style.width=''; stage.style.height='';
+        if (mFloat) mFloat.textContent='⇲';
+        if (floatBtn) floatBtn.textContent='Float';
+      } else {
+        const rect = stage.getBoundingClientRect();
+        stage.classList.add('floating');
+        stage.style.left = rect.left + 'px';
+        stage.style.top = rect.top + 'px';
+        stage.style.width = rect.width + 'px';
+        stage.style.height = rect.height + 'px';
+        if (mFloat) mFloat.textContent='Dock';
+        if (floatBtn) floatBtn.textContent='Dock';
+      }
+    }
+    if (floatBtn) floatBtn.addEventListener('click', toggleFloat);
+    if (mFloat) mFloat.addEventListener('click', toggleFloat);
+    if (resetViewBtn) resetViewBtn.addEventListener('click', ()=>{
+      if (!isFloating()) toggleFloat();
+      const arStr = getComputedStyle(document.documentElement).getPropertyValue('--stage-ar') || '16/9';
+      const parts = arStr.split('/'); const ratio = (parseFloat(parts[0])||16)/(parseFloat(parts[1])||9);
+      const w = Math.min(window.innerWidth*0.8, 960);
+      const h = Math.round(w/ratio);
+      stage.style.width = w+'px'; stage.style.height = h+'px';
+      stage.style.left = Math.round((window.innerWidth - w)/2)+'px';
+      stage.style.top = Math.round((window.innerHeight - h)/2)+'px';
+      debounceRecompute();
+    });
+
+    // Drag
+    let dragActive=false, dragId=null, suppressClick=false;
+    stage.addEventListener('pointerdown', (e)=>{
+      if (!isFloating() || e.target===resizeHandle) return;
+      e.preventDefault();
+      dragActive=true; dragId=e.pointerId;
+      stage.setPointerCapture(dragId);
+      stage.classList.add('dragging');
+    });
+    stage.addEventListener('pointermove', (e)=>{
+      if (!dragActive || e.pointerId!==dragId) return;
+      const left = stage.offsetLeft + e.movementX;
+      const top  = stage.offsetTop  + e.movementY;
+      const maxLeft = window.innerWidth - stage.offsetWidth;
+      const maxTop  = window.innerHeight - stage.offsetHeight;
+      stage.style.left = Math.max(0, Math.min(left, maxLeft)) + 'px';
+      stage.style.top  = Math.max(0, Math.min(top,  maxTop))  + 'px';
+    });
+    function endDrag(){
+      if (!dragActive) return;
+      dragActive=false;
+      try{ stage.releasePointerCapture(dragId); }catch{}
+      stage.classList.remove('dragging');
+      suppressClick = true; setTimeout(()=>{ suppressClick=false; }, 80);
+    }
+    stage.addEventListener('pointerup', (e)=>{ if (e.pointerId===dragId) endDrag(); });
+    stage.addEventListener('lostpointercapture', endDrag);
+
+    // Prevent accidental click (play/pause) after dragging/resizing
+    stage.addEventListener('click', (ev)=>{ if (suppressClick) { ev.stopPropagation(); ev.preventDefault(); } }, true);
+
+    // Resize
+    let resizeActive=false, resizeId=null;
+    if (resizeHandle){
+      resizeHandle.addEventListener('pointerdown', (e)=>{
+        if (!isFloating()) return;
+        e.preventDefault();
+        resizeActive=true; resizeId=e.pointerId;
+        resizeHandle.setPointerCapture(resizeId);
+      });
+      resizeHandle.addEventListener('pointermove', (e)=>{
+        if (!resizeActive || e.pointerId!==resizeId) return;
+        const newW = Math.max(160, stage.offsetWidth + e.movementX);
+        const wpx = asciiCanvas.width || 640; const hpx = asciiCanvas.height || 360;
+        const ratio = (wpx && hpx) ? (wpx/hpx) : (16/9);
+        const newH = Math.max(120, Math.round(newW / ratio));
+        stage.style.width = newW+'px';
+        stage.style.height = newH+'px';
+      });
+      function endResize(){
+        if (!resizeActive) return;
+        resizeActive=false;
+        try{ resizeHandle.releasePointerCapture(resizeId); }catch{}
+        suppressClick = true; setTimeout(()=>{ suppressClick=false; }, 80);
+        debounceRecompute();
+      }
+      resizeHandle.addEventListener('pointerup', (e)=>{ if (e.pointerId===resizeId) endResize(); });
+      resizeHandle.addEventListener('lostpointercapture', endResize);
+    }
+
+    // Debounced fit-to-size recompute (increase ASCII detail to match new window)
+    let recomputeTimer=null;
+    function debounceRecompute(){ clearTimeout(recomputeTimer); recomputeTimer=setTimeout(recomputeFromStageSize,120); }
+    function recomputeFromStageSize(){
+      try{
+        const video = document.getElementById('video');
+        if (!video || !video.videoWidth || !video.videoHeight) return;
+        if (typeof window.measureFont === 'function') window.measureFont();
+        const fm = window.fontMetrics || {chW:8, lineH:14};
+        const rect = stage.getBoundingClientRect();
+        const desiredCols = Math.max(1, Math.floor(rect.width / fm.chW));
+        const desiredRows = Math.max(1, Math.floor(rect.height / fm.lineH));
+        const halfBlock = !!(document.getElementById('halfBlock') && document.getElementById('halfBlock').checked);
+        const vW = video.videoWidth;
+        const vH = halfBlock ? (video.videoHeight/2) : video.videoHeight;
+        const charAspect = fm.lineH / fm.chW;
+        const sampleW = vW / desiredCols;
+        const sampleH = vH * charAspect / desiredRows;
+        let sample = Math.max(sampleW, sampleH);
+        const minS = +(scaleInput?.min||4), maxS = +(scaleInput?.max||36);
+        sample = Math.max(minS, Math.min(maxS, Math.round(sample)));
+        if (scaleInput){ scaleInput.value = String(sample); if (scaleLabel) scaleLabel.textContent = sample + ' px/char'; }
+        if (typeof window.updateDerived === 'function') window.updateDerived();
+        if (status) status.textContent = 'Resized to ' + desiredCols + '×' + desiredRows + ' chars';
+      }catch(e){ /* ignore */ }
+    }
+
+    // Keep floating window within viewport on browser resize
+    window.addEventListener('resize', ()=>{
+      if (!isFloating()) return;
+      const maxLeft = Math.max(0, window.innerWidth - stage.offsetWidth);
+      const maxTop  = Math.max(0, window.innerHeight - stage.offsetHeight);
+      stage.style.left = Math.max(0, Math.min(stage.offsetLeft, maxLeft)) + 'px';
+      stage.style.top  = Math.max(0, Math.min(stage.offsetTop,  maxTop))  + 'px';
+    });
+  })();
+  </script>
+
+
+<script>
+;(function(){
+  var b64 = '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';
+  var bin = Uint8Array.from(atob(b64), function(c){ return c.charCodeAt(0); });
+  var exp = null;
+  var ready = WebAssembly.instantiate(bin.buffer).then(function(obj){ exp = obj.instance.exports; return exp; }).catch(function(e){ console.warn('WASM nearest16 init failed', e); return null; });
+  window.getWasmNearest16 = async function(name){
+    try{
+      await ready; if (!exp) return null;
+      var map = { dos:'nearest16_dos', win16:'nearest16_win16', ansi16:'nearest16_ansi16', vga16:'nearest16_vga16', cga16:'nearest16_cga16', gray16:'nearest16_gray16', xterm16:'nearest16_xterm16' };
+      var fn = exp[ map[(name||'').toLowerCase()] ];
+      return (typeof fn==='function') ? function(r,g,b){ return fn(r|0,g|0,b|0)|0; } : null;
+    } catch(e){ return null; }
+  };
+  (function(){
+    var orig = window.nearestIdx;
+    if (typeof orig !== 'function') return;
+    var cache = {};
+    window.nearestIdx = function(rgb, palette){
+      try{
+        if (Array.isArray(palette) && palette.length===16){
+          var sel = document.getElementById('paletteMode');
+          var name = sel ? (sel.value||'').toLowerCase() : '';
+          if (name && cache[name] === undefined){
+            (window.getWasmNearest16 && window.getWasmNearest16(name)).then(function(fn){ cache[name] = fn || false; });
+          }
+          var fn = cache[name];
+          if (fn){
+            var idx = fn(rgb[0]|0, rgb[1]|0, rgb[2]|0)|0;
+            if (idx>=0 && idx<16) return idx;
+          }
+        }
+      }catch(e){}
+      return orig(rgb, palette);
+    };
+  })();
+})();
+</script>
+
+
+<script type="module">
+/* --- WebGPU ASCII Renderer & hook --- */
+class WebGPURenderer {
+  constructor({ canvas, video, opts = {}, onInfo = ()=>{}, onError = console.warn }) {
+    this.canvas = canvas; this.video = video;
+    this.onInfo = onInfo; this.onError = onError;
+    this.opts = Object.assign({
+      cols: 120, rows: 68,
+      charset: "@$B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\\"^`'. ",
+      fontFamily: "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
+      glyphPx: { w: 8, h: 16 },
+      hqLuma: true
+    }, opts);
+    this._running = false; this._vfc = null; this._ctx = null;
+    this._atlas = null; this._atlasTex = null; this._uniforms = null;
+  }
+  async init() {
+    if (!('gpu' in navigator)) { this.onError('WebGPU not supported'); return false; }
+    this.adapter = await navigator.gpu.requestAdapter();
+    if (!this.adapter) { this.onError('WebGPU adapter not found'); return false; }
+    this.device = await this.adapter.requestDevice();
+    this.ctx = this.canvas.getContext('webgpu');
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    this.ctx.configure({ device: this.device, format, alphaMode: 'opaque' });
+
+    const { pipeline, bindGroupLayout } = this.#buildPipeline(format);
+    this.pipeline = pipeline; this.bindGroupLayout = bindGroupLayout;
+
+    await this.#buildGlyphAtlas();
+
+    // uniforms
+    this.uniformBuf = this.device.createBuffer({ size: 4*4*4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.sampler = this.device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+
+    this.onInfo('WebGPU initialized');
+    return true;
+  }
+  resize(cols, rows, glyphPx) {
+    this.opts.cols = cols|0; this.opts.rows = rows|0;
+    if (glyphPx) this.opts.glyphPx = glyphPx;
+    const cssW = this.opts.cols * this.opts.glyphPx.w;
+    const cssH = this.opts.rows * this.opts.glyphPx.h;
+    // Set canvas CSS size; backing store determined by UA
+    this.canvas.width = cssW;
+    this.canvas.height = cssH;
+  }
+  start() {
+    if (this._running) return;
+    this._running = true;
+    const step = (now, meta) => {
+      if (!this._running) return;
+      try { this.render(); } catch (e) { this.onError('WebGPU render error: ' + e.message); }
+      if (this.video.requestVideoFrameCallback) {
+        this._vfc = this.video.requestVideoFrameCallback(step);
+      } else {
+        this._raf = requestAnimationFrame(step);
+      }
+    };
+    step();
+  }
+  stop() {
+    this._running = false;
+    try { if (this._vfc) this.video.cancelVideoFrameCallback(this._vfc); }catch{}
+    try { if (this._raf) cancelAnimationFrame(this._raf); }catch{}
+  }
+  async #buildGlyphAtlas(){
+    // Build an alpha atlas of glyphs in a square grid
+    const ch = this.opts.charset;
+    const N = ch.length;
+    const cols = Math.ceil(Math.sqrt(N));
+    const rows = Math.ceil(N / cols);
+    const gw = this.opts.glyphPx.w|0, gh = this.opts.glyphPx.h|0;
+
+    const c = document.createElement('canvas');
+    c.width = cols * gw; c.height = rows * gh;
+    const cx = c.getContext('2d');
+    cx.clearRect(0,0,c.width,c.height);
+    cx.fillStyle = '#fff';
+    cx.textBaseline = 'top';
+    cx.font = `${Math.max(1, gh-2)}px ${this.opts.fontFamily}`;
+    for (let i=0;i<N;i++){
+      const x = (i % cols) * gw;
+      const y = Math.floor(i / cols) * gh;
+      const s = ch[i];
+      cx.fillText(s, x, y);
+    }
+    const bmp = await createImageBitmap(c);
+    const tex = this.device.createTexture({
+      size: { width: c.width, height: c.height }, format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+    });
+    this.device.queue.copyExternalImageToTexture({ source: bmp }, { texture: tex }, { width: c.width, height: c.height });
+    this._atlas = { cols, rows, count: N, width: c.width, height: c.height };
+    this._atlasTex = tex;
+  }
+  #buildPipeline(format){
+    const shader = this.device.createShaderModule({ code: `
+      
+      struct Globals {
+        v0: vec4<f32>; // canvasPx.xy, cellPx.xy
+        v1: vec4<f32>; // grid.xy, invGrid.xy
+        v2: vec4<f32>; // atlasDims.xy, charsetCount, hqLuma
+        v3: vec4<f32>; // gamma, contrast, saturation, edge
+        v4: vec4<f32>; // colorMode, dither, paletteMode, halfBlock
+        v5: vec4<f32>; // halfIdx: space, upper, lower, full
+      };
+      @group(0) @binding(0) var extTex: external_texture;
+      @group(0) @binding(1) var atlasTex: texture_2d<f32>;
+      @group(0) @binding(2) var atlasSmp: sampler;
+      @group(0) @binding(3) var<uniform> G: Globals;
+
+      fn canvasPx() -> vec2<f32> { return G.v0.xy; }
+      fn cellPx()   -> vec2<f32> { return G.v0.zw; }
+      fn grid()     -> vec2<f32> { return G.v1.xy; }
+      fn invGrid()  -> vec2<f32> { return G.v1.zw; }
+      fn atlasDims()-> vec2<f32> { return G.v2.xy; }
+      fn charsetCount() -> f32 { return G.v2.z; }
+      fn hqLumaFlag() -> f32 { return G.v2.w; }
+      fn gamma() -> f32 { return G.v3.x; }
+      fn contrast() -> f32 { return G.v3.y; }
+      fn saturation() -> f32 { return G.v3.z; }
+      fn edgeBoost() -> f32 { return G.v3.w; }
+      fn colorMode() -> i32 { return i32(round(G.v4.x)); }
+      fn ditherMode() -> i32 { return i32(round(G.v4.y)); }
+      fn paletteMode() -> i32 { return i32(round(G.v4.z)); }
+      fn halfBlock() -> bool { return G.v4.w > 0.5; }
+      fn halfIdx() -> vec4<f32> { return G.v5; }
+
+
+      @group(0) @binding(1) var atlasTex: texture_2d<f32>;
+      @group(0) @binding(2) var atlasSmp: sampler;
+      @group(0) @binding(3) var<uniform> G: Globals;
+
+      fn lumaFast(c: vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.299,0.587,0.114)); }
+      fn lumaHQ  (c: vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.2126,0.7152,0.0722)); }
+      fn LUMA(c: vec3<f32>) -> f32 { return mix(lumaFast(c), lumaHQ(c), G.hqLuma); }
+
+      @vertex
+      fn vs(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
+        var p = array<vec2<f32>,6>(
+          vec2(-1.0,-1.0), vec2( 1.0,-1.0), vec2(-1.0, 1.0),
+          vec2(-1.0, 1.0), vec2( 1.0,-1.0), vec2( 1.0, 1.0));
+        return vec4<f32>(p[vid], 0.0, 1.0);
+      }
+
+      fn atlasUV(index: f32, within: vec2<f32>, atlasCols: f32, atlasRows: f32) -> vec2<f32> {
+        let col = index % atlasCols;
+        let row = floor(index / atlasCols);
+        let step = vec2<f32>(1.0/atlasCols, 1.0/atlasRows);
+        return vec2(col/atlasCols, row/atlasRows) + within * step;
+      }
+
+      @fragment
+      fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
+        let fragPx = frag.xy;
+        let cell   = floor(fragPx / cellPx());
+        let inCell = fract(fragPx / cellPx());
+        // sample video at cell center
+        let uvC = (cell + vec2(0.5, 0.5)) / grid();
+        let src = textureSampleBaseClampToEdge(extTex, uvC).rgb;
+        var lum = clamp(LUMA(src), 0.0, 1.0);
+        let idx = floor(lum * max(1.0, G.charsetCount - 1.0) + 0.5);
+        let atlasCols = ceil(sqrt(G.charsetCount));
+        let atlasRows = ceil(G.charsetCount / atlasCols);
+        let uvA = atlasUV(idx, inCell, atlasCols, atlasRows);
+        let g = textureSample(atlasTex, atlasSmp, uvA).a; // use alpha from atlas
+        // premultiplied color output
+        return vec4(src * g, g);
+      }`});
+    const pipeline = this.device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module: shader, entryPoint: 'vs' },
+      fragment: {
+        module: shader, entryPoint: 'fs',
+        targets: [{ format, blend: { color: { srcFactor:'one', dstFactor:'one-minus-src-alpha' },
+                                     alpha: { srcFactor:'one', dstFactor:'one-minus-src-alpha' } } }]
+      },
+      primitive: { topology: 'triangle-list' }
+    });
+    return { pipeline, bindGroupLayout: pipeline.getBindGroupLayout(0) };
+  }
+  render(){
+    if (!this.video || !this.video.videoWidth) return;
+    const dev = this.device;
+    const enc = dev.createCommandEncoder();
+    const view = this.ctx.getCurrentTexture().createView();
+    // uniforms
+    const W = this.canvas.width, H = this.canvas.height;
+    const cellX = Math.max(1, Math.floor(W / this.opts.cols));
+    const cellY = Math.max(1, Math.floor(H / this.opts.rows));
+    const gridX = this.opts.cols, gridY = this.opts.rows;
+    const u = new Float32Array([W, H, cellX, cellY, gridX, gridY, this._atlas.count, this.opts.hqLuma?1:0]);
+    dev.queue.writeBuffer(this.uniformBuf, 0, u.buffer, u.byteOffset, u.byteLength);
+
+    const ext = dev.importExternalTexture({ source: this.video });
+    const bg = dev.createBindGroup({
+      layout: this.bindGroupLayout,
+      entries: [
+        { binding: 0, externalTexture: ext },
+        { binding: 1, resource: this._atlasTex.createView() },
+        { binding: 2, resource: this.sampler },
+        { binding: 3, resource: { buffer: this.uniformBuf } }
+      ]
+    });
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store' }] });
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, bg);
+    pass.draw(6);
+    pass.end();
+    dev.queue.submit([enc.finish()]);
+  }
+}
+
+/* ---- Hook restartBackend to try WebGPU first ---- */
+(function(){
+  const orig = window.restartBackend;
+  window.restartBackend = async function(){
+    try{
+      const chk = (id) => !!(document.getElementById(id) && document.getElementById(id).checked);
+      const usingPre = chk('usePre');
+      const useWebGPU = chk('useWebGPU');
+      if (!useWebGPU || usingPre || !('gpu' in navigator)) return orig.apply(this, arguments);
+
+      const video = document.getElementById('video');
+      const canvas2d = document.getElementById('ascii');
+      const canvasGPU = document.getElementById('asciiGpu');
+      const asciiPre = document.getElementById('asciiPre');
+      if (!video || !canvasGPU) return orig.apply(this, arguments);
+
+      // Toggle visibility
+      canvas2d.classList.add('hidden');
+      asciiPre.classList.add('hidden');
+      canvasGPU.classList.remove('hidden');
+
+      // Build renderer
+      const val = (id)=>{ const el=document.getElementById(id); return el?el.value:null; };
+      const chkVal = (id)=>!!((document.getElementById(id)||{}).checked);
+      const charset = (document.getElementById('charset')||{}).value || "@$B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\\"^`'. ";
+      const fontSize = parseInt(val('fontSize')||'14', 10);
+      const hq = chkVal('hqLuma');
+      const fm = (function(){
+        // approximate font metrics
+        const c = document.createElement('canvas'); const cx = c.getContext('2d'); cx.font = fontSize + "px " + "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+        const m = cx.measureText("M");
+        const chW = Math.max(1, Math.ceil(m.width)); const lineH = Math.ceil(fontSize*1.2);
+        return { chW, lineH };
+      })();
+
+      const W = (window.workCanvas && window.workCanvas.width)  ? window.workCanvas.width  : Math.floor(canvas2d.width/8);
+      const H = (window.workCanvas && window.workCanvas.height) ? window.workCanvas.height : Math.floor(canvas2d.height/16);
+      const cols = W|0, rows = Math.max(1, (document.getElementById('halfBlock')?.checked ? Math.floor(H/2) : H)|0);
+
+      // Size GPU canvas to match current ASCII canvas CSS px
+      canvasGPU.width = canvas2d.width; canvasGPU.height = canvas2d.height;
+
+      if (window._webgpu && window._webgpu.stop) try{ window._webgpu.stop(); }catch{}
+      const r = new AsciiWebGPU({
+        canvas: canvasGPU, video,
+        opts: { cols, rows, charset, fontFamily: "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace", glyphPx:{w:fm.chW, h:fm.lineH}, hqLuma: !!hq },
+        onInfo: (m)=>console.log('[WebGPU]', m),
+        onError: (m)=>console.warn('[WebGPU]', m)
+      });
+      const ok = await r.init();
+      if (ok) {
+        r.resize(cols, rows, { w: fm.chW, h: fm.lineH });
+        r.start();
+        window._webgpu = r;
+        try{ if (window.backendHandle && window.backendHandle.stop) window.backendHandle.stop(); }catch{}
+        window.backendHandle = { stop(){ try{ window._webgpu && window._webgpu.stop(); }catch{} } };
+        var ro=document.getElementById('rendererOut'); if (ro) ro.textContent='WebGPU (ASCII WGSL)';
+        return;
+      } else {
+        // Fallback
+        canvasGPU.classList.add('hidden');
+        canvas2d.classList.remove('hidden');
+        return orig.apply(this, arguments);
+      }
+    }catch(e){
+      console.warn('WebGPU path failed, falling back:', e);
+      return orig.apply(this, arguments);
+    }
+  };
+
+  // Re-run when the toggle changes
+  document.getElementById('useWebGPU')?.addEventListener('change', ()=>{ try{ window.restartBackend(); }catch{} });
+})();
+</script>
+
+<!-- Rebuilt WebGPU ASCII pipeline -->
+<script>
+
+class AsciiWebGPU {
+  constructor({ canvas, video, opts = {}, onInfo = ()=>{}, onError = console.warn }) {
+    this.canvas = canvas;
+    this.video = video;
+    this.onInfo = onInfo;
+    this.onError = onError;
+    this.opts = Object.assign({
+      cols: 120, rows: 68,
+      charset: "@$B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\\"^`'. ",
+      fontFamily: "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
+      glyphPx: { w: 8, h: 16 },
+      hqLuma: true
+    }, opts);
+    this._running = false;
+    this._vfc = null;
+    this.adapter = null;
+    this.device = null;
+    this.ctx = null;
+    this.pipeline = null;
+    this.bindGroupLayout = null;
+    this.uniformBuf = null;
+    this.sampler = null;
+    this._atlas = null;
+    this._atlasTex = null;
+    this._halfIndices = { space: 0, upper: 0, lower: 0, full: 0 };
+  }
+
+  async init() {
+    try {
+      if (!('gpu' in navigator)) { this.onError('WebGPU not supported'); return false; }
+      this.adapter = await navigator.gpu.requestAdapter();
+      if (!this.adapter) { this.onError('WebGPU adapter not found'); return false; }
+      this.device = await this.adapter.requestDevice();
+      this.ctx = this.canvas.getContext('webgpu');
+      const format = navigator.gpu.getPreferredCanvasFormat();
+      this.ctx.configure({ device: this.device, format, alphaMode: 'opaque' });
+
+      const { pipeline, bindGroupLayout } = this.#buildPipeline(format);
+      this.pipeline = pipeline;
+      this.bindGroupLayout = bindGroupLayout;
+      await this.#buildGlyphAtlas();
+
+      // uniforms: allocate generously (20 vec4 slots -> 20*16 = 320 bytes)
+      const bytes = 16 * 20;
+      this.uniformBuf = this.device.createBuffer({ size: bytes, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      this.sampler = this.device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+
+      this.onInfo('WebGPU initialized');
+      return true;
+    } catch (e) {
+      this.onError('WebGPU init failed: ' + (e && e.message || e));
+      return false;
+    }
+  }
+
+  resize(cols, rows, glyphPx) {
+    this.opts.cols = cols|0; this.opts.rows = rows|0;
+    if (glyphPx) this.opts.glyphPx = glyphPx;
+    const cssW = this.opts.cols * this.opts.glyphPx.w;
+    const cssH = this.opts.rows * this.opts.glyphPx.h;
+    this.canvas.width = cssW;
+    this.canvas.height = cssH;
+  }
+
+  start() {
+    if (this._running) return;
+    this._running = true;
+    const step = (now, meta) => {
+      if (!this._running) return;
+      try { this.render(); } catch (e) { this.onError('WebGPU render error: ' + e.message); }
+      if (this.video && this.video.requestVideoFrameCallback) {
+        this._vfc = this.video.requestVideoFrameCallback(step);
+      } else {
+        this._raf = requestAnimationFrame(step);
+      }
+    };
+    if (this.video && this.video.requestVideoFrameCallback) {
+      this._vfc = this.video.requestVideoFrameCallback(step);
+    } else {
+      this._raf = requestAnimationFrame(step);
+    }
+  }
+
+  stop() {
+    this._running = false;
+    try { if (this._vfc && this.video) this.video.cancelVideoFrameCallback(this._vfc); } catch{}
+    try { if (this._raf) cancelAnimationFrame(this._raf); } catch{}
+  }
+
+  #computeHalfBlockIndices() {
+    const chs = this.opts.charset;
+    const idx = (c) => Math.max(0, chs.indexOf(c));
+    this._halfIndices = {
+      space: idx(' '),
+      upper: idx('▀'),
+      lower: idx('▄'),
+      full:  idx('█')
+    };
+  }
+
+  async #buildGlyphAtlas() {
+    this.#computeHalfBlockIndices();
+    const ch = this.opts.charset;
+    const N = ch.length;
+    const cols = Math.ceil(Math.sqrt(N));
+    const rows = Math.ceil(N / cols);
+    const gw = this.opts.glyphPx.w|0, gh = this.opts.glyphPx.h|0;
+
+    const c = document.createElement('canvas');
+    c.width = cols * gw; c.height = rows * gh;
+    const cx = c.getContext('2d');
+    cx.clearRect(0,0,c.width,c.height);
+    cx.fillStyle = '#fff';
+    cx.textBaseline = 'top';
+    cx.font = `${Math.max(1, gh-2)}px ${this.opts.fontFamily}`;
+    for (let i=0;i<N;i++){
+      const x = (i % cols) * gw;
+      const y = Math.floor(i / cols) * gh;
+      const s = ch[i];
+      cx.fillText(s, x, y);
+    }
+    const bmp = await createImageBitmap(c);
+    const tex = this.device.createTexture({
+      size: { width: c.width, height: c.height },
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+    });
+    this.device.queue.copyExternalImageToTexture({ source: bmp }, { texture: tex }, { width: c.width, height: c.height });
+    this._atlas = { cols, rows, count: N, width: c.width, height: c.height };
+    this._atlasTex = tex;
+  }
+
+  #buildPipeline(format){
+    const shader = this.device.createShaderModule({ code: `
+      
+      struct Globals {
+        v0: vec4<f32>; // canvasPx.xy, cellPx.xy
+        v1: vec4<f32>; // grid.xy, invGrid.xy
+        v2: vec4<f32>; // atlasDims.xy, charsetCount, hqLuma
+        v3: vec4<f32>; // gamma, contrast, saturation, edge
+        v4: vec4<f32>; // colorMode, dither, paletteMode, halfBlock
+        v5: vec4<f32>; // halfIdx: space, upper, lower, full
+      };
+      @group(0) @binding(0) var extTex: external_texture;
+      @group(0) @binding(1) var atlasTex: texture_2d<f32>;
+      @group(0) @binding(2) var atlasSmp: sampler;
+      @group(0) @binding(3) var<uniform> G: Globals;
+
+      fn canvasPx() -> vec2<f32> { return G.v0.xy; }
+      fn cellPx()   -> vec2<f32> { return G.v0.zw; }
+      fn grid()     -> vec2<f32> { return G.v1.xy; }
+      fn invGrid()  -> vec2<f32> { return G.v1.zw; }
+      fn atlasDims()-> vec2<f32> { return G.v2.xy; }
+      fn charsetCount() -> f32 { return G.v2.z; }
+      fn hqLumaFlag() -> f32 { return G.v2.w; }
+      fn gamma() -> f32 { return G.v3.x; }
+      fn contrast() -> f32 { return G.v3.y; }
+      fn saturation() -> f32 { return G.v3.z; }
+      fn edgeBoost() -> f32 { return G.v3.w; }
+      fn colorMode() -> i32 { return i32(round(G.v4.x)); }
+      fn ditherMode() -> i32 { return i32(round(G.v4.y)); }
+      fn paletteMode() -> i32 { return i32(round(G.v4.z)); }
+      fn halfBlock() -> bool { return G.v4.w > 0.5; }
+      fn halfIdx() -> vec4<f32> { return G.v5; }
+
+
+      @group(0) @binding(1) var atlasTex: texture_2d<f32>;
+      @group(0) @binding(2) var atlasSmp: sampler;
+      @group(0) @binding(3) var<uniform> G: Globals;
+
+      fn lumaFast(c: vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.299,0.587,0.114)); }
+      fn lumaHQ  (c: vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.2126,0.7152,0.0722)); }
+      fn LUMA(c: vec3<f32>) -> f32 { return mix(lumaFast(c), lumaHQ(c), hqLumaFlag()); }
+
+      fn srgb2linear(c: vec3<f32>) -> vec3<f32> { return pow(c, vec3<f32>(2.2)); }
+      fn linear2srgb(c: vec3<f32>) -> vec3<f32> { return pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0/2.2)); }
+
+      fn adjustColor(c: vec3<f32>) -> vec3<f32> {
+        // Apply contrast in linear
+        var lin = srgb2linear(c);
+        lin = (lin - vec3<f32>(0.5)) * vec3<f32>(contrast()) + vec3<f32>(0.5);
+        // Saturation
+        let lum = LUMA(lin);
+        lin = mix(vec3<f32>(lum), lin, saturation());
+        // Convert to sRGB then apply gamma
+        var srgb = linear2srgb(lin);
+        srgb = pow(max(srgb, vec3<f32>(0.0001)), vec3<f32>(1.0/max(gamma(), 0.001)));
+        return srgb;
+      }
+
+      fn bayer2(p: vec2<f32>) -> f32 {
+        let x = i32(p.x) & 1;
+        let y = i32(p.y) & 1;
+        let t = select(select(0, 2, x==1), select(3, 1, x==1), y==1);
+        return f32(t) / 4.0;
+      }
+      fn bayer4(p: vec2<f32>) -> f32 {
+        let x = i32(p.x) & 3;
+        let y = i32(p.y) & 3;
+        var m = array<i32,16>(0,8,2,10, 12,4,14,6, 3,11,1,9, 15,7,13,5);
+        return f32(m[y*4 + x]) / 16.0;
+      }
+      fn ditherAdjust(cell: vec2<f32>) -> f32 {
+        let mode = i32(round(f32(ditherMode())));
+        if (mode == 1) { return (bayer2(cell) - 0.375) * 0.20; }
+        if (mode == 2) { return (bayer4(cell) - 0.46875) * 0.15; }
+        return 0.0;
+      }
+
+      fn q6s(v: f32) -> f32 {
+        // Map to nearest of [0, 95, 135, 175, 215, 255] / 255
+        var s = array<f32,6>(0.0, 95.0/255.0, 135.0/255.0, 175.0/255.0, 215.0/255.0, 1.0);
+        var best = s[0];
+        var bd = abs(v - s[0]);
+        for (var i:i32=1;i<6;i=i+1) {
+          let d = abs(v - s[i]);
+          if (d < bd) { bd = d; best = s[i]; }
+        }
+        return best;
+      }
+      fn qWebSafe(c: vec3<f32>) -> vec3<f32> {
+        return vec3<f32>(
+          round(c.r * 255.0 / 51.0) * 51.0 / 255.0,
+          round(c.g * 255.0 / 51.0) * 51.0 / 255.0,
+          round(c.b * 255.0 / 51.0) * 51.0 / 255.0
+        );
+      }
+      fn qXterm(c: vec3<f32>) -> vec3<f32> {
+        return vec3<f32>( q6s(c.r), q6s(c.g), q6s(c.b) );
+      }
+      fn paletteAdjust(c: vec3<f32>) -> vec3<f32> {
+        let mode = i32(round(f32(paletteMode())));
+        if (mode == 1) {
+          // 3-tone gray
+          let y = LUMA(c);
+          let t = floor(y * 3.0 + 0.5) / 3.0;
+          return vec3<f32>(t, t, t);
+        }
+        if (mode == 2) { return qWebSafe(c); }
+        if (mode == 3) { return qXterm(c); }
+        return c;
+      }
+
+      fn atlasUV(index: f32, withinCell: vec2<f32>) -> vec2<f32> {
+        let cols = atlasDims().x;
+        let col = index % cols;
+        let row = floor(index / cols);
+        let step = vec2<f32>(1.0/cols, 1.0/atlasDims().y);
+        return vec2<f32>(col, row) * step + withinCell * step;
+      }
+
+      @vertex
+      fn vs(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
+        var p = array<vec2<f32>,6>(
+          vec2(-1.0,-1.0), vec2( 1.0,-1.0), vec2(-1.0, 1.0),
+          vec2(-1.0, 1.0), vec2( 1.0,-1.0), vec2( 1.0, 1.0));
+        return vec4<f32>(p[vid], 0.0, 1.0);
+      }
+
+      @fragment
+      fn fs(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
+        let fragPx = fragPos.xy;
+        let cell   = floor(fragPx / cellPx());
+        let inCell = fract(fragPx / cellPx());
+
+        // Sample video at cell center (and neighbors for edge)
+        let uvC = (cell + vec2(0.5, 0.5)) * invGrid();
+        var src = textureSampleBaseClampToEdge(extTex, uvC).rgb;
+
+        var lum = LUMA(src) + ditherAdjust(cell);
+        // Edge term using neighbor cells
+        if (edgeBoost() > 0.0) {
+          let uvL = (max(cell - vec2(1.0,0.0), vec2(0.0,0.0)) + vec2(0.5,0.5)) * invGrid();
+          let uvR = (min(cell + vec2(1.0,0.0), grid()-vec2(1.0,1.0)) + vec2(0.5,0.5)) * invGrid();
+          let uvU = (max(cell - vec2(0.0,1.0), vec2(0.0,0.0)) + vec2(0.5,0.5)) * invGrid();
+          let uvD = (min(cell + vec2(0.0,1.0), grid()-vec2(1.0,1.0)) + vec2(0.5,0.5)) * invGrid();
+          let lL = LUMA(textureSampleBaseClampToEdge(extTex, uvL).rgb);
+          let lR = LUMA(textureSampleBaseClampToEdge(extTex, uvR).rgb);
+          let lU = LUMA(textureSampleBaseClampToEdge(extTex, uvU).rgb);
+          let lD = LUMA(textureSampleBaseClampToEdge(extTex, uvD).rgb);
+          let dx = abs(lR - lL);
+          let dy = abs(lD - lU);
+          let e = sqrt(dx*dx + dy*dy);
+          lum = clamp(lum + clamp(e * edgeBoost() * 0.75, 0.0, 0.25), 0.0, 1.0);
+        } else {
+          lum = clamp(lum, 0.0, 1.0);
+        }
+
+        // Half-block special mode
+        if ((halfBlock()?1.0:0.0) > 0.5) {
+          let uvT = vec2( (cell.x + 0.5) * invGrid().x, (cell.y*2.0 + 0.5) / (grid().y*2.0) );
+          let uvB = vec2( (cell.x + 0.5) * invGrid().x, (cell.y*2.0 + 1.5) / (grid().y*2.0) );
+          let lt = LUMA(textureSampleBaseClampToEdge(extTex, uvT).rgb) + ditherAdjust(cell*vec2(1.0,2.0));
+          let lb = LUMA(textureSampleBaseClampToEdge(extTex, uvB).rgb) + ditherAdjust(cell*vec2(1.0,2.0) + vec2(0.0,1.0));
+          let t = 0.5;
+          var pick: f32 = halfIdx().x; // space
+          if (lt >= t && lb >= t) { pick = halfIdx().w; }       // █
+          else if (lt >= t && lb <  t) { pick = halfIdx().y; }  // ▀
+          else if (lt <  t && lb >= t) { pick = halfIdx().z; }  // ▄
+          // else space
+          let uvA = atlasUV(pick, inCell);
+          let g = textureSample(atlasTex, atlasSmp, uvA).a;
+          var col = adjustColor(src);
+          if (i32(round(colorMode())) == 0) { col = vec3<f32>(lum, lum, lum); } // monochrome
+          col = paletteAdjust(col);
+          return vec4<f32>(col * g, g);
+        }
+
+        // Normal ASCII mode
+        let count = max(1.0, charsetCount() - 1.0);
+        let idx = floor(lum * count + 0.5);
+        let uvA = atlasUV(idx, inCell);
+        let g = textureSample(atlasTex, atlasSmp, uvA).a;
+        var col = adjustColor(src);
+        if (i32(round(colorMode())) == 0) { col = vec3<f32>(lum, lum, lum); } // monochrome
+        col = paletteAdjust(col);
+        return vec4<f32>(col * g, g);
+      }`});
+
+    const bindGroupLayout = this.device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, externalTexture: {} },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }
+      ]
+    });
+    const pipeline = this.device.createRenderPipeline({
+      layout: this.device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
+      vertex: { module: shader, entryPoint: 'vs' },
+      fragment: { module: shader, entryPoint: 'fs', targets: [{ format }] },
+      primitive: { topology: 'triangle-list' }
+    });
+    return { pipeline, bindGroupLayout };
+  }
+
+  #readUI() {
+    const getF = (id, def) => {
+      const el = document.getElementById(id);
+      if (!el) return def;
+      const v = parseFloat(el.value ?? el.getAttribute('value') ?? def);
+      return isFinite(v) ? v : def;
+    };
+    const getI = (id, def) => {
+      const el = document.getElementById(id);
+      if (!el) return def|0;
+      const v = parseInt(el.value ?? el.getAttribute('value') ?? def, 10);
+      return isFinite(v) ? (v|0) : (def|0);
+    };
+    const getCk = (id) => {
+      const el = document.getElementById(id);
+      return !!(el && el.checked);
+    };
+    return {
+      gamma: getF('gamma', 1.0),
+      contrast: getF('contrast', 1.0),
+      saturation: getF('saturation', 1.0),
+      edge: getF('edgeBoost', 0.0),
+      colorMode: getI('colorMode', 0),     // 0 mono, 1 truecolor
+      dither: getI('dither', 0),          // 0 none, 1 bayer2, 2 bayer4
+      paletteMode: getI('paletteMode', 0),// 0 none, 1 gray3, 2 websafe, 3 xterm
+      hqLuma: getCk('hqLuma') ? 1.0 : 0.0,
+      halfBlock: getCk('halfBlock') ? 1.0 : 0.0
+    };
+  }
+
+  render() {
+    const dev = this.device;
+    if (!dev) return;
+
+    const enc = dev.createCommandEncoder();
+    const view = this.ctx.getCurrentTexture().createView();
+
+    // Grid metrics
+    const W = this.canvas.width|0, H = this.canvas.height|0;
+    const cellX = Math.max(1, Math.floor(W / this.opts.cols));
+    const cellY = Math.max(1, Math.floor(H / this.opts.rows));
+    const gridX = this.opts.cols|0, gridY = this.opts.rows|0;
+
+    // UI params
+    const P = this.#readUI();
+
+    // Prepare uniform vec4 packs (v0..v5)
+    const u = new Float32Array(4*6);
+    // v0: canvasPx.xy, cellPx.xy
+    u[0]=W; u[1]=H; u[2]=cellX; u[3]=cellY;
+    // v1: grid.xy, invGrid.xy
+    u[4]=gridX; u[5]=gridY; u[6]=1/Math.max(1, gridX); u[7]=1/Math.max(1, gridY);
+    // v2: atlasDims.xy, charsetCount, hqLuma
+    u[8]=this._atlas.cols; u[9]=this._atlas.rows; u[10]=this._atlas.count; u[11]=P.hqLuma;
+    // v3: gamma, contrast, saturation, edge
+    u[12]=P.gamma; u[13]=P.contrast; u[14]=P.saturation; u[15]=P.edge;
+    // v4: colorMode, dither, paletteMode, halfBlock
+    u[16]=P.colorMode; u[17]=P.dither; u[18]=P.paletteMode; u[19]=P.halfBlock;
+    // v5: halfIdx: space, upper, lower, full
+    u[20]=this._halfIndices.space; u[21]=this._halfIndices.upper; u[22]=this._halfIndices.lower; u[23]=this._halfIndices.full;
+
+    dev.queue.writeBuffer(this.uniformBuf, 0, u.buffer, 0, u.byteLength);
+
+    const ext = dev.importExternalTexture({ source: this.video });
+    const bg = dev.createBindGroup({
+      layout: this.bindGroupLayout,
+      entries: [
+        { binding: 0, externalTexture: ext },
+        { binding: 1, resource: this._atlasTex.createView() },
+        { binding: 2, resource: this.sampler },
+        { binding: 3, resource: { buffer: this.uniformBuf } }
+      ]
+    });
+
+    const pass = enc.beginRenderPass({
+      colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r:0, g:0, b:0, a:1 } }]
+    });
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, bg);
+    pass.draw(6);
+    pass.end();
+    dev.queue.submit([enc.finish()]);
+  }
+}
+
+</script>
+
+  <script src="webgpu_mobile_patch.js" defer></script>
+</body></html>
