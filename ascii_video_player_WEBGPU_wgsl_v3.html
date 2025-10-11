@@ -37,8 +37,15 @@
     .left{min-width:280px}
     .right{display:grid;grid-template-rows:1fr auto;min-height:0}
     .stage{contain: layout; position:relative;display:flex;align-items:center;justify-content:center;background:#000;border-radius:12px;border:1px solid var(--border);min-height:320px;overflow:auto;aspect-ratio:var(--stage-ar)}
-    canvas#ascii{display:block;width:100%;height:100%;}
-    canvas#asciiGpu{display:block;width:100%;height:100%;}
+    /* Keep canvases within the stage bounds.  Use auto height so aspect ratio is preserved when scaled down. */
+    canvas#ascii,
+    canvas#asciiGpu{
+      display:block;
+      width:100%;
+      height:auto;
+      max-height:100%;
+      image-rendering: pixelated;
+    }
     .footer{padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;color:var(--muted);font-size:12px}
     .kv{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center}
     .muted{color:var(--muted)}
@@ -575,11 +582,35 @@
       rebuildCharLUT();
 
       if (video.videoWidth && video.videoHeight){
+        // Measure character cell in CSS pixels
         const { chW, lineH } = measureFont();
         const charAspect = lineH / chW;
+        // Base resolution derived from sample slider and video resolution
         const vH = halfBlock ? (video.videoHeight/2)|0 : video.videoHeight;
-        cols = Math.max(1, Math.floor(video.videoWidth / sample));
-        rows = Math.max(1, Math.floor(vH / sample * charAspect));
+        const colsFromSample = Math.max(1, Math.floor(video.videoWidth / sample));
+        const rowsFromSample = Math.max(1, Math.floor(vH / sample * charAspect));
+        // Limit the ASCII grid so it never exceeds the available stage size
+        let maxCols = colsFromSample;
+        let maxRows = rowsFromSample;
+        // Try to derive available space from the stage element; fall back to its client sizes if getBoundingClientRect reports zero
+        let stageW = 0, stageH = 0;
+        {
+          const rect = stage.getBoundingClientRect();
+          stageW = rect.width;
+          stageH = rect.height;
+        }
+        // Fallback to clientWidth/clientHeight when rect sizes are zero (initial layout)
+        if (!stageW || !stageH) {
+          stageW = stage.clientWidth || stage.offsetWidth || 0;
+          stageH = stage.clientHeight || stage.offsetHeight || 0;
+        }
+        if (stageW && stageH){
+          maxCols = Math.max(1, Math.floor(stageW / chW));
+          maxRows = Math.max(1, Math.floor(stageH / lineH));
+        }
+        // Final cols/rows respect both sampling and available space
+        cols = Math.max(1, Math.min(colsFromSample, maxCols));
+        rows = Math.max(1, Math.min(rowsFromSample, maxRows));
         workCanvas.width = cols;
         workCanvas.height = halfBlock ? rows*2 : rows;
         {
