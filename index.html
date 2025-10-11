@@ -358,6 +358,35 @@
     const video = document.getElementById('video');
     const asciiCanvas = document.getElementById('ascii');
     const asciiCtx = asciiCanvas.getContext('2d');
+        // Grab the WebGPU canvas for GPU rendering
+        const asciiGpu = document.getElementById('asciiGpu');
+        // HiDPI‑aware sizing of the GPU canvas
+        function sizeGpuCanvas(cssW, cssH){
+          // Use the helper to size the GPU canvas backing store and style
+          if (window.WGPUFix && asciiGpu) {
+            WGPUFix.sizeGPUCanvas(asciiGpu, cssW, cssH);
+          } else if (asciiGpu) {
+            // Fallback: mirror ASCII canvas sizing when helper not loaded
+            const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+            asciiGpu.width  = Math.round(cssW * dpr);
+            asciiGpu.height = Math.round(cssH * dpr);
+            asciiGpu.style.width  = cssW + 'px';
+            asciiGpu.style.height = cssH + 'px';
+          }
+        }
+        // Lazy WebGPU configuration; returns existing configuration if already set
+        let __gpuConfig;
+        async function ensureWebGPUConfigured(){
+          if (__gpuConfig) return __gpuConfig;
+          try {
+            if (window.WGPUFix && asciiGpu) {
+              __gpuConfig = await WGPUFix.setupWebGPU(asciiGpu);
+            }
+          } catch(e) {
+            console.error('Failed to configure WebGPU', e);
+          }
+          return __gpuConfig;
+        }
     asciiCtx.textBaseline = 'top';
     // HiDPI crispness
     const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
@@ -578,6 +607,8 @@
         const cssW = chW * cols;
         const cssH = lineH * rows;
         sizeAsciiCanvas(cssW, cssH);
+            // Keep the GPU canvas in sync with the ASCII canvas size
+            sizeGpuCanvas(cssW, cssH);
         if (!applyVideoStageAspect(cssW, cssH)){
           clearVideoStageAspect();
         }
@@ -593,6 +624,10 @@
       const _useGpu = !!(document.getElementById('useWebGPU')?.checked && 'gpu' in navigator);
       asciiCanvas.classList.toggle('hidden', usingPre || _useGpu);
       document.getElementById('asciiGpu')?.classList.toggle('hidden', !(_useGpu && !usingPre));
+           // Configure WebGPU once when enabling GPU mode
+           if (_useGpu && !usingPre){
+             ensureWebGPUConfigured();
+           }
 
       try { restartBackend(); }catch{}
     }
@@ -2553,5 +2588,6 @@ class AsciiWebGPU {
 
 </script>
 
-  <script src="webgpu_mobile_patch.js" defer></script>
+  <script src="wgpu-fix.js" defer></script>
+      <script src="webgpu_mobile_patch.js" defer></script>
 </body></html>

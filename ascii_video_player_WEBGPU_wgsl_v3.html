@@ -354,6 +354,33 @@
     const video = document.getElementById('video');
     const asciiCanvas = document.getElementById('ascii');
     const asciiCtx = asciiCanvas.getContext('2d');
+        // Grab the WebGPU canvas for GPU rendering
+        const asciiGpu = document.getElementById('asciiGpu');
+        // HiDPI‑aware sizing of the GPU canvas
+        function sizeGpuCanvas(cssW, cssH){
+          if (window.WGPUFix && asciiGpu) {
+            WGPUFix.sizeGPUCanvas(asciiGpu, cssW, cssH);
+          } else if (asciiGpu) {
+            const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+            asciiGpu.width  = Math.round(cssW * dpr);
+            asciiGpu.height = Math.round(cssH * dpr);
+            asciiGpu.style.width  = cssW + 'px';
+            asciiGpu.style.height = cssH + 'px';
+          }
+        }
+        // Lazy WebGPU configuration; returns existing configuration if already set
+        let __gpuConfig;
+        async function ensureWebGPUConfigured(){
+          if (__gpuConfig) return __gpuConfig;
+          try {
+            if (window.WGPUFix && asciiGpu) {
+              __gpuConfig = await WGPUFix.setupWebGPU(asciiGpu);
+            }
+          } catch(e) {
+            console.error('Failed to configure WebGPU', e);
+          }
+          return __gpuConfig;
+        }
     asciiCtx.textBaseline = 'top';
     // HiDPI crispness
     const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
@@ -555,7 +582,13 @@
         rows = Math.max(1, Math.floor(vH / sample * charAspect));
         workCanvas.width = cols;
         workCanvas.height = halfBlock ? rows*2 : rows;
-        sizeAsciiCanvas(chW * cols, lineH * rows);
+        {
+               const cssW = chW * cols;
+               const cssH = lineH * rows;
+               sizeAsciiCanvas(cssW, cssH);
+               // Keep the GPU canvas in sync with the ASCII canvas size
+               sizeGpuCanvas(cssW, cssH);
+             }
         resOut.textContent = cols + " × " + rows + (halfBlock ? " (half-block ×2 v)" : "") + " chars";
         infoOut.textContent = video.videoWidth + "×" + video.videoHeight + " @ " + (video.frameRate || '?') + "fps";
         rendererOut.textContent = usingPre ? 'DOM <pre>' : ((document.getElementById('useWebGPU')?.checked && 'gpu' in navigator) ? 'WebGPU (ASCII WGSL)' : (useWebGLInput.checked ? 'WebGL (ASCII shader)' : 'Canvas text'));
@@ -565,6 +598,10 @@
       const _useGpu = !!(document.getElementById('useWebGPU')?.checked && 'gpu' in navigator);
       asciiCanvas.classList.toggle('hidden', usingPre || _useGpu);
       document.getElementById('asciiGpu')?.classList.toggle('hidden', !(_useGpu && !usingPre));
+           // Configure WebGPU once when enabling GPU mode
+           if (_useGpu && !usingPre){
+             ensureWebGPUConfigured();
+           }
 
       try { restartBackend(); }catch{}
     }
@@ -2491,5 +2528,5 @@ class AsciiWebGPU {
   }
 }
 
-</script>
-</body></html>
+<script src="wgpu-fix.js" defer></script>
+    </body></html>
