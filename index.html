@@ -1801,8 +1801,14 @@ const W = (window.workCanvas && window.workCanvas.width)  ? window.workCanvas.wi
 </script>
 
 
+<script src="webgpu_adapter_helper.js"></script>
 <script type="module">
 /* --- WebGPU ASCII Renderer & hook --- */
+const requestWebGPUAdapter = window.requestWebGPUAdapter ?? (async function requestWebGPUAdapterFallback() {
+  if (!('gpu' in navigator)) return null;
+  return navigator.gpu.requestAdapter();
+});
+
 class WebGPURenderer {
   constructor({ canvas, video, opts = {}, onInfo = ()=>{}, onError = console.warn }) {
     this.canvas = canvas; this.video = video;
@@ -1819,7 +1825,7 @@ class WebGPURenderer {
   }
   async init() {
     if (!('gpu' in navigator)) { this.onError('WebGPU not supported'); return false; }
-    this.adapter = await navigator.gpu.requestAdapter();
+    this.adapter = await requestWebGPUAdapter();
     if (!this.adapter) { this.onError('WebGPU adapter not found'); return false; }
     this.device = await this.adapter.requestDevice();
     this.ctx = this.canvas.getContext('webgpu');
@@ -2122,7 +2128,7 @@ class AsciiWebGPU {
   async init() {
     try {
       if (!('gpu' in navigator)) { this.onError('WebGPU not supported'); return false; }
-      this.adapter = await navigator.gpu.requestAdapter();
+      this.adapter = await requestWebGPUAdapter();
       if (!this.adapter) { this.onError('WebGPU adapter not found'); return false; }
       this.device = await this.adapter.requestDevice();
       this.ctx = this.canvas.getContext('webgpu');
@@ -2462,9 +2468,18 @@ class AsciiWebGPU {
     }
 
     let paletteMode = 0;
-    if (colorSel === 'gray4' || paletteSel === 'gray16') paletteMode = 1;
-    else if (colorSel === 'fg216') paletteMode = 2;
-    else if (colorSel === 'xterm256') paletteMode = 3;
+    if (colorMode === 1) {
+      if (colorSel === 'gray4') {
+        paletteMode = 1;
+      } else if (colorSel === 'fg216') {
+        paletteMode = 2;
+      } else if (colorSel === 'xterm256') {
+        paletteMode = 3;
+      } else if (paletteSel === 'gray16') {
+        // Only honor the palette dropdown when using a palette-based mode
+        paletteMode = 1;
+      }
+    }
 
     const ditherMode = (ditherSel === 'bayer2') ? 1 : (ditherSel === 'bayer4' ? 2 : 0);
 

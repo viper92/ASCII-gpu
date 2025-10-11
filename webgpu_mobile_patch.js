@@ -54,11 +54,47 @@
   }
 
   // Small adapter sanity check
+  const requestWebGPUAdapter = (typeof window === 'object' && window && typeof window.requestWebGPUAdapter === 'function')
+    ? window.requestWebGPUAdapter
+    : null;
+
+  async function findAdapter(){
+    if (!wantGPU) return null;
+    if (requestWebGPUAdapter) {
+      return requestWebGPUAdapter();
+    }
+
+    const attempts = (typeof window === 'object' && window && Array.isArray(window.__webgpuAdapterAttempts))
+      ? window.__webgpuAdapterAttempts
+      : [
+          { powerPreference: 'high-performance' },
+          { powerPreference: 'low-power' },
+          null,
+          { forceFallbackAdapter: true }
+        ];
+
+    let lastError = null;
+    for (const opts of attempts) {
+      try {
+        const adapter = opts ? await navigator.gpu.requestAdapter(opts) : await navigator.gpu.requestAdapter();
+        if (adapter) {
+          return adapter;
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (lastError) throw lastError;
+    return null;
+  }
+
   if (wantGPU) {
     (async () => {
       try {
-        const ad = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-        if (!ad) showBanner('<b>WebGPU adapter not found.</b> Your device may be blocklisted. You can try <code>chrome://flags/#enable-unsafe-webgpu</code>.');
+        const ad = await findAdapter();
+        if (!ad) {
+          showBanner('<b>WebGPU adapter not found.</b> Your device may be blocklisted. You can try <code>chrome://flags/#enable-unsafe-webgpu</code>.');
+        }
       } catch (e) {
         showBanner('<b>WebGPU init error:</b> ' + String(e && e.message || e));
       }
