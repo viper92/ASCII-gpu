@@ -933,7 +933,23 @@ function loopVFC(now, metadata){
     function loadUrl(url){ revokeObjectURLIfAny(); video.crossOrigin='anonymous'; video.src=url.trim(); video.load(); setStatus('Loaded URL (may require CORS): '+url); }
     loadUrlBtn.addEventListener('click', () => { const url=urlInput.value.trim(); if (url) loadUrl(url); });
 
-    video.addEventListener('loadedmetadata', () => { updateDerived(); });
+    video.addEventListener('loadedmetadata', () => {
+      // Auto‑determine a default sampling and font size based on the
+      // video's intrinsic resolution and the available stage size.
+      if (window.AspectDefaults) {
+        window.AspectDefaults.applyAspectDefaults({
+          video,
+          stageEl: stage,
+          fontInput: document.getElementById('fontSize'),
+          sampleInput: document.getElementById('scale'),
+          fontFamilySel: document.getElementById('fontFamily'),
+          halfBlockCheckbox: document.getElementById('halfBlock'),
+          targetSample: 10
+        });
+      }
+      // After adjusting defaults, recompute derived values (cols/rows, canvas sizing, etc.).
+      updateDerived();
+    });
     video.addEventListener('resize', updateDerived);
     window.addEventListener('resize', updateDerived);
 
@@ -2620,5 +2636,7 @@ class AsciiWebGPU {
 </script>
 
   <script src="wgpu-fix.js" defer></script>
-      <script src="webgpu_mobile_patch.js" defer></script>
+  <!-- Auto‑aspect defaults helper ensures the ASCII frame fits the stage on first load. -->
+  <script src="aspect-defaults.js" defer></script>
+  <script src="webgpu_mobile_patch.js" defer></script>
 </body></html>

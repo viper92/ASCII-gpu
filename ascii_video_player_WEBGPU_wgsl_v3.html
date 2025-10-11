@@ -907,7 +907,22 @@ function loopVFC(now, metadata){
     function loadUrl(url){ revokeObjectURLIfAny(); video.crossOrigin='anonymous'; video.src=url.trim(); video.load(); setStatus('Loaded URL (may require CORS): '+url); }
     loadUrlBtn.addEventListener('click', () => { const url=urlInput.value.trim(); if (url) loadUrl(url); });
 
-    video.addEventListener('loadedmetadata', () => { updateDerived(); });
+    video.addEventListener('loadedmetadata', () => {
+      // Auto‑determine a default sampling and font size based on the
+      // video's intrinsic resolution and the available stage size.
+      if (window.AspectDefaults) {
+        window.AspectDefaults.applyAspectDefaults({
+          video,
+          stageEl: stage,
+          fontInput: fontSizeInput,
+          sampleInput: scaleInput,
+          fontFamilySel: fontFamilySel,
+          halfBlockCheckbox: halfBlockInput,
+          targetSample: 10
+        });
+      }
+      updateDerived();
+    });
     video.addEventListener('resize', updateDerived);
     window.addEventListener('resize', updateDerived);
 
@@ -2560,4 +2575,6 @@ class AsciiWebGPU {
 }
 
 <script src="wgpu-fix.js" defer></script>
+<!-- Auto‑aspect defaults helper ensures the ASCII frame fits the stage on first load. -->
+<script src="aspect-defaults.js" defer></script>
     </body></html>
