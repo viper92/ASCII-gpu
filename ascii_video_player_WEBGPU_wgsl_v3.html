@@ -2062,7 +2062,13 @@ class WebGPURenderer {
 </script>
 
 <!-- Rebuilt WebGPU ASCII pipeline -->
+<script src="webgpu_adapter_helper.js"></script>
 <script>
+
+const requestWebGPUAdapter = window.requestWebGPUAdapter ?? (async function requestWebGPUAdapterFallback() {
+  if (!('gpu' in navigator)) return null;
+  return navigator.gpu.requestAdapter();
+});
 
 class AsciiWebGPU {
   constructor({ canvas, video, opts = {}, onInfo = ()=>{}, onError = console.warn }) {
@@ -2094,7 +2100,7 @@ class AsciiWebGPU {
   async init() {
     try {
       if (!('gpu' in navigator)) { this.onError('WebGPU not supported'); return false; }
-      this.adapter = await navigator.gpu.requestAdapter();
+      this.adapter = await requestWebGPUAdapter();
       if (!this.adapter) { this.onError('WebGPU adapter not found'); return false; }
       this.device = await this.adapter.requestDevice();
       this.ctx = this.canvas.getContext('webgpu');
