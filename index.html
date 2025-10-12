@@ -447,6 +447,11 @@
     const autoQualityInput=Q('autoQuality');
     const useWebGLInput=Q('useWebGL');
 
+    // WebGL performance helper (initialized lazily). When using the WebGL renderer we
+    // drive the rendering through the WebGLPerfPatch, which uses requestVideoFrameCallback
+    // and an adaptive sampler to maintain the configured FPS cap.
+    let glPerf = null;
+
     const resOut=Q('resOut'), infoOut=Q('infoOut'), rendererOut=Q('rendererOut'), timingOut=Q('timingOut'), gpuOut=Q('gpuOut'), watchdogOut=Q('watchdogOut'), status=Q('status');
 
     // Palettes (16-color families)
@@ -904,9 +909,59 @@ function loopVFC(now, metadata){
     charsetPreset.addEventListener('change', () => { if (charsetPreset.value!=='custom') charsetInput.value = PRESETS[charsetPreset.value]; updateDerived(); });
 
     // Playback
-    if (playBtn) playBtn.addEventListener('click', async () => { try { await video.play(); startLoops(); setStatus('Playing'); } catch {} });
-    if (pauseBtn) pauseBtn.addEventListener('click', () => { video.pause(); stopLoops(); setStatus('Paused'); });
-    if (stopBtn) stopBtn.addEventListener('click', () => { video.pause(); video.currentTime=0; stopLoops(); setStatus('Stopped'); });
+        if (playBtn) playBtn.addEventListener('click', async () => {
+      try {
+        await video.play();
+        if (useWebGLInput && useWebGLInput.checked && !(usePreInput && usePreInput.checked)) {
+          if (!glPerf) {
+            const glCanvas = document.getElementById('asciiGpu');
+            const glCtx = (window._glAscii && window._glAscii.gl) ? window._glAscii.gl : (glCanvas ? glCanvas.getContext('webgl2') : null);
+            if (glCtx && glCanvas && typeof WebGLPerfPatch !== 'undefined') {
+              const maxSample = parseInt(scaleInput?.max || '36', 10);
+              const targetFps = parseInt(fpsCapInput?.value || '30', 10);
+              glPerf = WebGLPerfPatch.init({
+                gl: glCtx,
+                canvas: glCanvas,
+                video,
+                getState: () => ({ sample: parseInt(scaleInput.value, 10) }),
+                setState: (next) => {
+                  const s = Math.max(1, Math.min(maxSample, next.sample));
+                  scaleInput.value = String(s);
+                  if (scaleLabel) scaleLabel.textContent = s + ' px/char';
+                  updateDerived();
+                },
+                targetFps: targetFps,
+                adaptEvery: 6,
+                maxSample: maxSample
+              });
+            }
+          }
+          glPerf && glPerf.play ? glPerf.play() : startLoops();
+        } else {
+          startLoops();
+        }
+        setStatus('Playing');
+      } catch {}
+    });
+    if (pauseBtn) pauseBtn.addEventListener('click', () => {
+      video.pause();
+      if (glPerf && useWebGLInput && useWebGLInput.checked && !(usePreInput && usePreInput.checked)) {
+        glPerf.pause && glPerf.pause();
+      } else {
+        stopLoops();
+      }
+      setStatus('Paused');
+    });
+    if (stopBtn) stopBtn.addEventListener('click', () => {
+      video.pause();
+      video.currentTime = 0;
+      if (glPerf && useWebGLInput && useWebGLInput.checked && !(usePreInput && usePreInput.checked)) {
+        glPerf.pause && glPerf.pause();
+      } else {
+        stopLoops();
+      }
+      setStatus('Stopped');
+    });
     if (muteBtn) muteBtn.addEventListener('click', () => {
       video.muted = !video.muted; const t= video.muted ? 'Unmute' : 'Mute'; muteBtn.textContent=t; mMute.textContent=t;
     });
@@ -919,9 +974,59 @@ function loopVFC(now, metadata){
       const a = document.createElement('a'); a.href=url; a.download='ascii_snapshot.png'; a.click();
     });
 
-    if (mPlay) mPlay.addEventListener('click', async () => { try { await video.play(); startLoops(); setStatus('Playing'); } catch{} });
-    if (mPause) mPause.addEventListener('click', () => { video.pause(); stopLoops(); setStatus('Paused'); });
-    if (mStop) mStop.addEventListener('click', () => { video.pause(); video.currentTime=0; stopLoops(); setStatus('Stopped'); });
+        if (mPlay) mPlay.addEventListener('click', async () => {
+      try {
+        await video.play();
+        if (useWebGLInput && useWebGLInput.checked && !(usePreInput && usePreInput.checked)) {
+          if (!glPerf) {
+            const glCanvas = document.getElementById('asciiGpu');
+            const glCtx = (window._glAscii && window._glAscii.gl) ? window._glAscii.gl : (glCanvas ? glCanvas.getContext('webgl2') : null);
+            if (glCtx && glCanvas && typeof WebGLPerfPatch !== 'undefined') {
+              const maxSample = parseInt(scaleInput?.max || '36', 10);
+              const targetFps = parseInt(fpsCapInput?.value || '30', 10);
+              glPerf = WebGLPerfPatch.init({
+                gl: glCtx,
+                canvas: glCanvas,
+                video,
+                getState: () => ({ sample: parseInt(scaleInput.value, 10) }),
+                setState: (next) => {
+                  const s = Math.max(1, Math.min(maxSample, next.sample));
+                  scaleInput.value = String(s);
+                  if (scaleLabel) scaleLabel.textContent = s + ' px/char';
+                  updateDerived();
+                },
+                targetFps: targetFps,
+                adaptEvery: 6,
+                maxSample: maxSample
+              });
+            }
+          }
+          glPerf && glPerf.play ? glPerf.play() : startLoops();
+        } else {
+          startLoops();
+        }
+        setStatus('Playing');
+      } catch {}
+    });
+    if (mPause) mPause.addEventListener('click', () => {
+      video.pause();
+      if (glPerf && useWebGLInput && useWebGLInput.checked && !(usePreInput && usePreInput.checked)) {
+        glPerf.pause && glPerf.pause();
+      } else {
+        stopLoops();
+      }
+      setStatus('Paused');
+    });
+    if (mStop) mStop.addEventListener('click', () => {
+      video.pause();
+      video.currentTime = 0;
+      if (glPerf && useWebGLInput && useWebGLInput.checked && !(usePreInput && usePreInput.checked)) {
+        glPerf.pause && glPerf.pause();
+      } else {
+        stopLoops();
+      }
+      setStatus('Stopped');
+    });
     if (mMute) mMute.addEventListener('click', () => { video.muted = !video.muted; const t= video.muted ? 'Unmute' : 'Mute'; mMute.textContent=t; muteBtn.textContent=t; });
     if (mFs) mFs.addEventListener('click', () => {
       if (!document.fullscreenElement){ stage.requestFullscreen && stage.requestFullscreen(); }
@@ -2638,5 +2743,7 @@ class AsciiWebGPU {
   <script src="wgpu-fix.js" defer></script>
   <!-- Auto‑aspect defaults helper ensures the ASCII frame fits the stage on first load. -->
   <script src="aspect-defaults.js" defer></script>
-  <script src="webgpu_mobile_patch.js" defer></script>
+  <!-- WebGL performance patch (rVFC scheduling + adaptive sampling) -->
+  <script src=\"webgl-perf.js\" defer></script>
+  <script src=\"webgpu_mobile_patch.js\" defer></script>
 </body></html>
