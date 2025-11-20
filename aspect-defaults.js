@@ -62,6 +62,11 @@ class AspectDefaults {
       const fontFamily = fontFamilySel && fontFamilySel.value ? fontFamilySel.value : getComputedStyle(document.body).fontFamily || 'monospace';
       // Measure character metrics for the current font.
       let { chW, lineH } = AspectDefaults.measureFont(fontPx, fontFamily);
+      // Guard against unexpected zero/NaN metrics to avoid mis-comparing
+      // width (chW) and height (lineH) values later on.
+      if (!Number.isFinite(lineH) || lineH <= 0) {
+        lineH = fontPx;
+      }
       // Stage dimensions in CSS pixels.
       const stageW = Math.max(1, stageEl.clientWidth);
       const stageH = Math.max(1, stageEl.clientHeight);
@@ -74,8 +79,10 @@ class AspectDefaults {
       const halfBlock = halfBlockCheckbox && halfBlockCheckbox.checked;
       const vHPrime = halfBlock ? vH / 2 : vH;
       // Compute the sampling (px/char) required to fit width and height.
+      // Use character width for horizontal fit and line height for vertical fit
+      // to respect non-square fonts (e.g. condensed or tall glyphs).
       const widthFit = (vW * chW) / stageW;
-      const heightFit = (vHPrime * chW) / stageH;
+      const heightFit = (vHPrime * lineH) / stageH;
       let sampleFit = Math.ceil(Math.max(widthFit, heightFit));
       // Optionally adjust font size toward the target sampling.
       if (targetSample && targetSample > 0) {
@@ -90,14 +97,15 @@ class AspectDefaults {
         if (Math.abs(idealFontPx - fontPx) >= 0.25) {
           const measured = AspectDefaults.measureFont(idealFontPx, fontFamily);
           const newChW = measured.chW;
+          const newLineH = measured.lineH || idealFontPx;
           // Recompute fits with new character width.
           const newWidthFit = (vW * newChW) / stageW;
-          const newHeightFit = (vHPrime * newChW) / stageH;
+          const newHeightFit = (vHPrime * newLineH) / stageH;
           const newSampleFit = Math.ceil(Math.max(newWidthFit, newHeightFit));
           // Apply the new values.
           sampleFit = newSampleFit;
           chW = newChW;
-          lineH = measured.lineH;
+          lineH = newLineH;
           // Update the font input.
           fontInput.value = Math.round(idealFontPx).toString();
         }
