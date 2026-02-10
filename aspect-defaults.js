@@ -21,14 +21,22 @@ class AspectDefaults {
    * @returns {{ chW: number, lineH: number }}
    */
   static measureFont(fontPx, fontFamily) {
+    const safeFontPx = Number.isFinite(fontPx) && fontPx > 0 ? fontPx : 14;
     const tempCanvas = document.createElement('canvas');
     const ctx = tempCanvas.getContext('2d');
-    ctx.font = fontPx + 'px ' + fontFamily;
-    // Use a wide character ("M") as an approximation of typical glyph width.
-    const chW = ctx.measureText('M').width;
+
+    let chW = safeFontPx * 0.6;
+    if (ctx && typeof ctx.measureText === 'function') {
+      ctx.font = safeFontPx + 'px ' + fontFamily;
+      const measured = ctx.measureText('M').width;
+      if (Number.isFinite(measured) && measured > 0) {
+        chW = measured;
+      }
+    }
+
     // Approximate line height as equal to the font size. Real fonts might
     // differ, but this is sufficient for sizing calculations.
-    const lineH = fontPx;
+    const lineH = safeFontPx;
     return { chW, lineH };
   }
 

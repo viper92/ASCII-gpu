@@ -12,12 +12,21 @@ class WGPUFix {
     if (!navigator.gpu) {
       throw new Error('WebGPU not supported in this browser');
     }
-    const adapter = await navigator.gpu.requestAdapter();
+
+    const helper = (typeof window === 'object' && window && typeof window.requestWebGPUAdapter === 'function')
+      ? window.requestWebGPUAdapter
+      : null;
+    const adapter = helper ? await helper() : await navigator.gpu.requestAdapter();
+
     if (!adapter) {
-      throw new Error('Unable to obtain GPU adapter');
+      throw new Error('Unable to obtain GPU adapter after fallback attempts');
     }
+
     const device = await adapter.requestDevice();
     const context = canvas.getContext('webgpu');
+    if (!context) {
+      throw new Error('Unable to obtain WebGPU canvas context');
+    }
     const format = navigator.gpu.getPreferredCanvasFormat();
     context.configure({
       device,
@@ -36,12 +45,20 @@ class WGPUFix {
   }
 
   static computeGridFromFont(fontPx, fontFamily, cssW, cssH) {
+    const safeFontPx = Number.isFinite(fontPx) && fontPx > 0 ? fontPx : 14;
     const tempCanvas = document.createElement('canvas');
     const ctx = tempCanvas.getContext('2d');
-    ctx.font = fontPx + 'px ' + fontFamily;
-    const chW = ctx.measureText('M').width;
-    // Approximate line height as 1.0× font size; adjust as needed.
-    const lineH = fontPx * 1.0;
+
+    let chW = safeFontPx * 0.6;
+    if (ctx && typeof ctx.measureText === 'function') {
+      ctx.font = safeFontPx + 'px ' + fontFamily;
+      const measured = ctx.measureText('M').width;
+      if (Number.isFinite(measured) && measured > 0) {
+        chW = measured;
+      }
+    }
+
+    const lineH = safeFontPx;
     const cols = Math.max(1, Math.floor(cssW / chW));
     const rows = Math.max(1, Math.floor(cssH / lineH));
     return { chW, lineH, cols, rows };
