@@ -588,11 +588,14 @@
       if (video.videoWidth && video.videoHeight){
         // Measure character cell in CSS pixels
         const { chW, lineH } = measureFont();
-        const charAspect = lineH / chW;
+        // Convert video pixels to character rows while compensating for
+        // non-square glyph cells. Taller glyphs need fewer rows to preserve
+        // the source display aspect ratio.
+        const rowScale = chW / lineH;
         // Base resolution derived from sample slider and video resolution
         const vH = halfBlock ? (video.videoHeight/2)|0 : video.videoHeight;
         const colsFromSample = Math.max(1, Math.floor(video.videoWidth / sample));
-        const rowsFromSample = Math.max(1, Math.floor(vH / sample * charAspect));
+        const rowsFromSample = Math.max(1, Math.floor(vH / sample * rowScale));
         // Limit the ASCII grid so it never exceeds the available stage size
         let maxCols = colsFromSample;
         let maxRows = rowsFromSample;
