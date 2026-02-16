@@ -637,9 +637,16 @@
           maxCols = Math.max(1, Math.floor(stageW / chW));
           maxRows = Math.max(1, Math.floor(stageH / lineH));
         }
-        // Final cols/rows respect both sampling and available space
-        cols = Math.max(1, Math.min(colsFromSample, maxCols));
-        rows = Math.max(1, Math.min(rowsFromSample, maxRows));
+        // Final cols/rows respect both sampling and available space.
+        // Scale both axes by the same factor so changing settings never distorts
+        // the video's display aspect ratio.
+        const fitScale = Math.min(
+          1,
+          maxCols / colsFromSample,
+          maxRows / rowsFromSample
+        );
+        cols = Math.max(1, Math.floor(colsFromSample * fitScale));
+        rows = Math.max(1, Math.floor(rowsFromSample * fitScale));
         workCanvas.width = cols;
         workCanvas.height = halfBlock ? rows*2 : rows;
         const cssW = chW * cols;
